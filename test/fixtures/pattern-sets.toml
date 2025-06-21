@@ -1,0 +1,33 @@
+# Test pattern sets inheritance in TOML
+[pattern_sets]
+common = [
+  "src/**/*.js",
+  "src/**/*.ts",
+  "!node_modules/**",
+  "!dist/**"
+]
+
+tests = [
+  "test/**/*.js",
+  "test/**/*.spec.ts",
+  "!test/fixtures/**"
+]
+
+docs = [
+  "**/*.md",
+  "docs/**/*"
+]
+
+[formatters.prettier]
+command = "cat"  # Simple pass-through for testing
+extends = ["common", "tests"]
+patterns = ["*.json", "*.yml"]
+
+[formatters.eslint]
+command = "sed 's/const/let/g'"  # Simple transformation for testing
+extends = "common"
+patterns = ["test/**/*.js"]
+
+[formatters.markdownlint]
+command = "cat"  # Simple pass-through for testing
+extends = "docs"

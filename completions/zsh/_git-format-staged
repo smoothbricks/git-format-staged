@@ -1,0 +1,20 @@
+#compdef git-format-staged git-format-all
+
+_git-format-staged() {
+    _arguments \
+        '(-f --formatter)'{-f,--formatter}'[Formatter command]:command:' \
+        '--config[Config file]:config file:_files -g "*.{yml,yaml,toml}"' \
+        '--unstaged[Format only unstaged changes]' \
+        '--also-unstaged[Format both staged and unstaged changes]' \
+        '--files[Format specific files]:files:_files' \
+        '--no-update-working-tree[Do not update working tree files]' \
+        '--no-write[Dry run, do not modify files]' \
+        '(-v --verbose)'{-v,--verbose}'[Show formatting commands]' \
+        '--debug[Show detailed debug output]' \
+        '--dry-run[Preview what would be formatted]' \
+        '--version[Show version]' \
+        '--help[Show help]' \
+        '*::file patterns:_files'
+}
+
+_git-format-staged "$@"

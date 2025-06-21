@@ -1,0 +1,4 @@
+formatters:
+  bad:
+    command: "cat"
+    extends: nonexistent

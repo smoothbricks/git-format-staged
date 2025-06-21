@@ -1,0 +1,34 @@
+# Test pattern sets inheritance
+pattern_sets:
+  common:
+    - src/**/*.js
+    - src/**/*.ts
+    - "!node_modules/**"
+    - "!dist/**"
+  
+  tests:
+    - test/**/*.js
+    - test/**/*.spec.ts
+    - "!test/fixtures/**"
+  
+  docs:
+    - "**/*.md"
+    - docs/**/*
+
+formatters:
+  prettier:
+    command: cat  # Simple pass-through for testing
+    extends: [common, tests]  # Multiple inheritance
+    patterns:
+      - "*.json"
+      - "*.yml"
+  
+  eslint:
+    command: sed 's/const/let/g'  # Simple transformation for testing
+    extends: common  # Single inheritance
+    patterns:
+      - test/**/*.js  # Additional pattern
+  
+  markdownlint:
+    command: cat  # Simple pass-through for testing
+    extends: docs  # Just use docs patterns

@@ -1,0 +1,8 @@
+formatters:
+  test:
+    command: cat
+    patterns:
+      - "*.js"
+      - "*file"      # Should match files ending with "file"
+      - "**/test/*"  # Should match test directories
+      - "!*temp*"    # Should exclude files with "temp" in name

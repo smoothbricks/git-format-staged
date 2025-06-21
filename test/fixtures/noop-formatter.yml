@@ -1,0 +1,4 @@
+formatters:
+  noop:
+    command: "cat"
+    patterns: ["*.txt"]

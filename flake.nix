@@ -30,7 +30,11 @@
         default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
             nodejs
-            python3
+            (python3.withPackages (ps: with ps; [
+              pathspec
+              pyyaml
+              toml
+            ]))
           ];
         };
       });

@@ -9,34 +9,302 @@
 # Usage: git-format-staged [OPTION]... [FILE]...
 # Example: git-format-staged --formatter 'prettier --stdin-filepath "{}"' '*.js'
 #
+# Version 4.0 - Enhanced with pathspec support, config files, and debug output
+#
 # Tested with Python versions 3.8 - 3.13.
 #
 # Original author: Jesse Hallett <jesse@sitr.us>
+# Enhanced by: Danny @SmoothBricks
 
 from __future__ import print_function
 import argparse
-from fnmatch import fnmatch
 from gettext import gettext as _
 import os
 import re
 import subprocess
 import sys
+import json
+from pathlib import Path
+
+# Try to import optional config file parsers
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
+
+try:
+    import toml
+    HAS_TOML = True
+except ImportError:
+    HAS_TOML = False
+from typing import List, Dict, Tuple, Optional, Any
+import logging
+
+# Import pathspec for proper gitignore-style pattern matching
+try:
+    import pathspec
+except ImportError:
+    print("Error: pathspec library is required. Install with: pip install pathspec", file=sys.stderr)
+    sys.exit(1)
 
 # The string $VERSION is replaced during the publish process.
 VERSION = '$VERSION'
 PROG = sys.argv[0]
 
+# Setup logging
+logger = logging.getLogger('git-format-staged')
+logger.setLevel(logging.WARNING)
+
+# Console handler
+console_handler = logging.StreamHandler(sys.stderr)
+formatter = logging.Formatter('[%(levelname)s] %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
 def info(msg):
     print(msg, file=sys.stdout)
 
 def warn(msg):
-    print('{}: warning: {}'.format(PROG, msg), file=sys.stderr)
+    # Use stderr directly to maintain v3 output format
+    print(f'{PROG}: warning: {msg}', file=sys.stderr)
 
 def fatal(msg):
-    print('{}: error: {}'.format(PROG, msg), file=sys.stderr)
+    logger.error(msg)
     exit(1)
 
-def format_staged_files(file_patterns, formatter, git_root, update_working_tree=True, write=True, verbose=False):
+def debug(msg):
+    logger.debug(msg)
+
+class Config:
+    """Configuration holder for git-format-staged"""
+    def __init__(self):
+        self.formatters = {}
+        self.pattern_sets = {}  # Store pattern sets
+        self.debug = False
+        self.update_working_tree = True
+        self.show_commands = False
+        
+    def validate(self) -> List[str]:
+        """Validate configuration and return list of errors"""
+        errors = []
+        
+        for name, formatter in self.formatters.items():
+            # Check required fields
+            if not formatter.get('command'):
+                errors.append(f"Formatter '{name}' is missing required 'command' field")
+            
+            # Check extends references
+            extends = formatter.get('extends', [])
+            if isinstance(extends, str):
+                extends = [extends]
+            for pattern_set_name in extends:
+                if pattern_set_name not in self.pattern_sets:
+                    errors.append(f"Formatter '{name}' extends undefined pattern set '{pattern_set_name}'")
+            
+            # Check patterns is a list
+            patterns = formatter.get('patterns', [])
+            if not isinstance(patterns, list):
+                errors.append(f"Formatter '{name}' patterns must be a list, got {type(patterns).__name__}")
+            else:
+                # Validate each pattern (handle nested lists from YAML aliases)
+                for i, pattern in enumerate(patterns):
+                    if isinstance(pattern, list):
+                        # This can happen with YAML aliases like - *alias
+                        errors.append(f"Formatter '{name}' has nested list in patterns at index {i}. This usually happens when using '- *alias' syntax. Use 'patterns: *alias' instead.")
+                    elif not isinstance(pattern, str):
+                        errors.append(f"Formatter '{name}' pattern must be string, got {type(pattern).__name__}: {pattern}")
+        
+        return errors
+    
+    @classmethod
+    def from_file(cls, config_file: Path) -> 'Config':
+        """Load configuration from YAML or TOML file"""
+        config = cls()
+        
+        if not config_file.exists():
+            return config
+            
+        content = config_file.read_text()
+        
+        try:
+            if config_file.suffix in ['.yml', '.yaml']:
+                if not HAS_YAML:
+                    fatal(f"YAML config file found but PyYAML is not installed. Install with: pip install pyyaml")
+                # Since YAML scanning happens before parsing, we need to preprocess
+                # but let's be smart about it - only quote things that look like
+                # file patterns, not actual YAML anchors/aliases
+                import re
+                
+                def smart_quote_patterns(yaml_content):
+                    """Quote file patterns that would conflict with YAML syntax"""
+                    lines = yaml_content.split('\n')
+                    result = []
+                    
+                    # First pass: find all anchor definitions
+                    anchors = set()
+                    for line in lines:
+                        # Match anchor definitions like "&anchor" or "key: &anchor"
+                        anchor_match = re.search(r'&(\w+)', line)
+                        if anchor_match:
+                            anchors.add(anchor_match.group(1))
+                    
+                    for line in lines:
+                        # Match list items that might be file patterns
+                        match = re.match(r'^(\s*-\s+)([*!&@`].*)$', line)
+                        if match:
+                            indent, value = match.groups()
+                            
+                            # Check if it's an alias reference
+                            alias_match = re.match(r'^\*(\w+)$', value)
+                            if alias_match and alias_match.group(1) in anchors:
+                                # It's a valid alias reference, keep as-is
+                                result.append(line)
+                            elif value.startswith('&'):
+                                # It's an anchor definition, keep as-is
+                                result.append(line)
+                            else:
+                                # It's a file pattern, quote it
+                                result.append(f'{indent}"{value}"')
+                        else:
+                            result.append(line)
+                    
+                    return '\n'.join(result)
+                
+                # Preprocess the content
+                processed_content = smart_quote_patterns(content)
+                data = yaml.safe_load(processed_content) or {}
+            elif config_file.suffix == '.toml':
+                if not HAS_TOML:
+                    fatal(f"TOML config file found but toml is not installed. Install with: pip install toml")
+                data = toml.loads(content) or {}
+            else:
+                fatal(f"Unsupported config file format: {config_file}")
+        except Exception as e:
+            fatal(f"Error parsing config file {config_file}: {e}")
+            
+        # Validate structure
+        if not isinstance(data, dict):
+            fatal(f"Config file must contain a dictionary/mapping, got {type(data).__name__}")
+            
+        # Parse pattern sets first
+        pattern_sets_data = data.get('pattern_sets', {})
+        if not isinstance(pattern_sets_data, dict):
+            fatal(f"'pattern_sets' must be a dictionary/mapping, got {type(pattern_sets_data).__name__}")
+            
+        for name, pattern_set in pattern_sets_data.items():
+            if isinstance(pattern_set, list):
+                # Direct list format: pattern_sets: name: [patterns]
+                # YAML: pattern_sets:
+                #         common: ["*.js", "*.ts"]
+                # TOML: [pattern_sets]
+                #       common = ["*.js", "*.ts"]
+                config.pattern_sets[name] = pattern_set
+            else:
+                warn(f"Skipping pattern set '{name}': must be a list, got {type(pattern_set).__name__}")
+                continue
+            
+        # Parse formatters
+        formatters_data = data.get('formatters', {})
+        if not isinstance(formatters_data, dict):
+            fatal(f"'formatters' must be a dictionary/mapping, got {type(formatters_data).__name__}")
+            
+        for name, formatter_config in formatters_data.items():
+            if isinstance(formatter_config, dict):
+                # Get base patterns from extends
+                extends = formatter_config.get('extends', [])
+                if isinstance(extends, str):
+                    extends = [extends]  # Normalize to list
+                
+                # Collect patterns from extended sets
+                extended_patterns = []
+                for pattern_set_name in extends:
+                    if pattern_set_name in config.pattern_sets:
+                        extended_patterns.extend(config.pattern_sets[pattern_set_name])
+                    else:
+                        warn(f"Formatter '{name}' extends undefined pattern set '{pattern_set_name}'")
+                
+                # Add formatter's own patterns
+                formatter_patterns = formatter_config.get('patterns', [])
+                if not isinstance(formatter_patterns, list):
+                    warn(f"Formatter '{name}' patterns must be a list, got {type(formatter_patterns).__name__}")
+                    continue
+                
+                # Flatten any nested lists (can happen with YAML aliases like - *alias)
+                flattened_patterns = []
+                for pattern in formatter_patterns:
+                    if isinstance(pattern, list):
+                        # Flatten nested list
+                        flattened_patterns.extend(pattern)
+                    else:
+                        flattened_patterns.append(pattern)
+                
+                all_patterns = extended_patterns + flattened_patterns
+                
+                config.formatters[name] = {
+                    'command': formatter_config.get('command', ''),
+                    'patterns': all_patterns,
+                    'extends': extends  # Keep for debugging
+                }
+            else:
+                warn(f"Skipping formatter '{name}': must be a dictionary, got {type(formatter_config).__name__}")
+        
+        # Parse global settings
+        settings = data.get('settings', {})
+        if isinstance(settings, dict):
+            config.update_working_tree = settings.get('update_working_tree', True)
+            config.show_commands = settings.get('show_commands', False)
+        
+        # Debug mode
+        config.debug = data.get('debug', False)
+        
+        # Validate the loaded config
+        errors = config.validate()
+        if errors:
+            for error in errors:
+                warn(f"Config validation: {error}")
+            fatal(f"Invalid configuration in {config_file}")
+        
+        return config
+
+def find_config_file() -> Optional[Path]:
+    """Find configuration file in current directory or parent directories"""
+    current = Path.cwd()
+    
+    while True:
+        for name in ['.git-format-staged.yml', '.git-format-staged.yaml', '.git-format-staged.toml']:
+            config_path = current / name
+            if config_path.exists():
+                return config_path
+        
+        # Check parent directory
+        parent = current.parent
+        if parent == current:  # Reached root
+            break
+        current = parent
+    
+    return None
+
+def create_pattern_spec(patterns: List[str]) -> pathspec.PathSpec:
+    """Convert patterns into a pathspec GitIgnoreSpec"""
+    # Use GitIgnoreSpec for proper gitignore semantics
+    return pathspec.GitIgnoreSpec.from_lines(patterns)
+
+def format_staged_files_with_formatters(formatters: List[Dict], git_root: str,
+                                       update_working_tree=True, write=True, verbose=False,
+                                       debug_mode=False):
+    """Format staged files, applying all matching formatters to each file"""
+    
+    if debug_mode:
+        logger.setLevel(logging.DEBUG)
+        debug("Configuration:")
+        debug(f"  Pattern matching: gitignore-style (pathspec)")
+        debug(f"  Number of formatters: {len(formatters)}")
+        for fmt in formatters:
+            debug(f"  Formatter '{fmt['name']}': {fmt['command']}")
+            debug(f"    Patterns: {fmt['patterns']}")
+        debug("")
+    
     try:
         output = subprocess.check_output([
             'git', 'diff-index',
@@ -44,19 +312,304 @@ def format_staged_files(file_patterns, formatter, git_root, update_working_tree=
             '--diff-filter=AM', # select only file additions and modifications
             '--no-renames',
             'HEAD'
-            ])
+        ])
+        
+        files_processed = 0
+        files_formatted = 0
+        files_skipped = 0
+        
         for line in output.splitlines():
             entry = parse_diff(line.decode('utf-8'))
-            entry_path = normalize_path(entry['src_path'], relative_to=git_root)
+            
             if entry['dst_mode'] == '120000':
                 # Do not process symlinks
                 continue
-            if not (matches_some_path(file_patterns, entry_path)):
+            
+            # Get relative path from git root for pattern matching
+            relative_path = os.path.relpath(entry['src_path'], git_root)
+            
+            if debug_mode:
+                debug(f"Processing staged file: {entry['src_path']}")
+                debug(f"  Relative path: {relative_path}")
+            
+            # Find all formatters that match this file
+            matching_formatters = []
+            for formatter in formatters:
+                if formatter['spec'].match_file(relative_path):
+                    matching_formatters.append(formatter)
+                    if debug_mode:
+                        debug(f"  Formatter '{formatter['name']}' matches")
+            
+            if not matching_formatters:
+                if debug_mode:
+                    debug(f"  No formatters match - skipping")
+                files_skipped += 1
                 continue
-            if format_file_in_index(formatter, entry, update_working_tree=update_working_tree, write=write, verbose=verbose):
-                info('Reformatted {} with {}'.format(entry['src_path'], formatter))
+            
+            files_processed += 1
+            
+            # Apply all matching formatters in a pipeline
+            orig_hash = entry['dst_hash']
+            
+            # Build the formatter pipeline
+            formatter_commands = []
+            for formatter in matching_formatters:
+                command = formatter['command'].replace('{}', entry['src_path'])
+                formatter_commands.append(command)
+                if debug_mode:
+                    debug(f"  Adding to pipeline: {formatter['name']}")
+            
+            # Run the pipeline
+            new_hash = format_object_piped(
+                formatter_commands,
+                orig_hash,
+                entry['src_path'],
+                verbose=verbose or debug_mode
+            )
+            
+            # If formatters made changes, update the index
+            if write and new_hash != orig_hash:
+                if not object_is_empty(new_hash):
+                    replace_file_in_index(entry, new_hash)
+                    
+                    if update_working_tree:
+                        try:
+                            patch_working_file(entry['src_path'], orig_hash, new_hash)
+                        except Exception as err:
+                            warn(str(err))
+                    
+                    files_formatted += 1
+                    formatter_names = ', '.join(f['name'] for f in matching_formatters)
+                    info(f"Reformatted {entry['src_path']} with {formatter_names}")
+        
+        if debug_mode:
+            debug("")
+            debug("Summary:")
+            debug(f"  Files processed: {files_processed}")
+            debug(f"  Files formatted: {files_formatted}")
+            debug(f"  Files skipped: {files_skipped}")
+            
+    except subprocess.CalledProcessError as err:
+        # Handle case where HEAD doesn't exist (initial commit)
+        if "bad revision 'HEAD'" in str(err):
+            warn("No HEAD commit found. Skipping staged file formatting.")
+        else:
+            fatal(str(err))
     except Exception as err:
         fatal(str(err))
+
+def format_staged_files(file_patterns: List[str], formatter: str, git_root: str, 
+                       update_working_tree=True, write=True, verbose=False, 
+                       debug_mode=False, config: Optional[Config] = None):
+    """Format staged files matching the given patterns"""
+    
+    if debug_mode:
+        logger.setLevel(logging.DEBUG)
+        debug("Configuration:")
+        if config:
+            debug(f"  Config file loaded with {len(config.formatters)} formatters")
+        debug(f"  Pattern matching: gitignore-style (pathspec)")
+        debug(f"  Patterns: {file_patterns}")
+        debug(f"  Formatter: {formatter}")
+        debug("")
+    
+    # Create pattern spec for matching
+    if file_patterns:
+        spec = create_pattern_spec(file_patterns)
+    else:
+        # If no patterns specified, match all files
+        spec = create_pattern_spec(['*'])
+    
+    try:
+        output = subprocess.check_output([
+            'git', 'diff-index',
+            '--cached',
+            '--diff-filter=AM',  # select only file additions and modifications
+            '--no-renames',
+            'HEAD'
+        ])
+        
+        files_processed = 0
+        files_formatted = 0
+        files_skipped = 0
+        errors = 0
+        
+        for line in output.splitlines():
+            entry = parse_diff(line.decode('utf-8'))
+            
+            # Skip symlinks
+            if entry['dst_mode'] == '120000':
+                continue
+            
+            # Get relative path from git root for pattern matching
+            relative_path = os.path.relpath(entry['src_path'], git_root)
+            
+            if debug_mode:
+                debug(f"Processing staged file: {entry['src_path']}")
+                debug(f"  Relative path: {relative_path}")
+                debug(f"  Testing against patterns...")
+            
+            # Check if file matches patterns
+            if spec.match_file(relative_path):
+                if debug_mode:
+                    debug(f"  Decision: INCLUDE")
+                    if formatter:
+                        debug(f"  Formatter: {formatter}")
+                
+                files_processed += 1
+                
+                if formatter:
+                    result = format_file_in_index(
+                        formatter, entry, 
+                        update_working_tree=update_working_tree, 
+                        write=write, 
+                        verbose=verbose or debug_mode
+                    )
+                    if result:
+                        files_formatted += 1
+                        info(f'Reformatted {entry["src_path"]} with {formatter}')
+            else:
+                if debug_mode:
+                    debug(f"  Decision: EXCLUDE")
+                files_skipped += 1
+        
+        if debug_mode:
+            debug("")
+            debug("Summary:")
+            debug(f"  Files processed: {files_processed}")
+            debug(f"  Files formatted: {files_formatted}")
+            debug(f"  Files skipped: {files_skipped}")
+            debug(f"  Errors: {errors}")
+            
+    except subprocess.CalledProcessError as err:
+        # Handle case where HEAD doesn't exist (initial commit)
+        if "bad revision 'HEAD'" in str(err):
+            warn("No HEAD commit found. Skipping staged file formatting.")
+        else:
+            fatal(str(err))
+    except Exception as err:
+        fatal(str(err))
+
+def format_working_tree_files(file_patterns: List[str], formatter: str, git_root: str,
+                            unstaged_only=False, also_unstaged=False, 
+                            specific_files: Optional[List[str]] = None,
+                            verbose=False, debug_mode=False):
+    """Format files in the working tree"""
+    
+    if debug_mode:
+        logger.setLevel(logging.DEBUG)
+        debug("Working tree formatting mode:")
+        debug(f"  Unstaged only: {unstaged_only}")
+        debug(f"  Also unstaged: {also_unstaged}")
+        debug(f"  Specific files: {specific_files}")
+        debug("")
+    
+    # Create pattern spec
+    if file_patterns:
+        spec = create_pattern_spec(file_patterns)
+    else:
+        spec = create_pattern_spec(['*'])
+    
+    files_to_format = []
+    
+    if specific_files:
+        # Format specific files provided by user
+        files_to_format = specific_files
+    else:
+        # Get files based on mode
+        if unstaged_only or also_unstaged:
+            # Get unstaged changes
+            output = subprocess.check_output([
+                'git', 'diff', '--name-only', '--diff-filter=AM'
+            ])
+            files_to_format.extend(output.decode('utf-8').splitlines())
+        
+        if also_unstaged:
+            # Also get staged changes for --also-unstaged mode
+            output = subprocess.check_output([
+                'git', 'diff', '--cached', '--name-only', '--diff-filter=AM'
+            ])
+            files_to_format.extend(output.decode('utf-8').splitlines())
+        
+        # Remove duplicates
+        files_to_format = list(set(files_to_format))
+    
+    files_processed = 0
+    files_formatted = 0
+    files_skipped = 0
+    
+    for file_path in files_to_format:
+        # Get relative path for pattern matching
+        relative_path = os.path.relpath(file_path, git_root)
+        
+        if debug_mode:
+            debug(f"Processing file: {file_path}")
+            debug(f"  Relative path: {relative_path}")
+        
+        if spec.match_file(relative_path):
+            if debug_mode:
+                debug(f"  Decision: INCLUDE")
+            
+            files_processed += 1
+            
+            if format_working_tree_file(formatter, file_path, verbose=verbose or debug_mode):
+                files_formatted += 1
+                info(f'Reformatted {file_path} with {formatter}')
+        else:
+            if debug_mode:
+                debug(f"  Decision: EXCLUDE")
+            files_skipped += 1
+    
+    if debug_mode:
+        debug("")
+        debug("Summary:")
+        debug(f"  Files processed: {files_processed}")
+        debug(f"  Files formatted: {files_formatted}")
+        debug(f"  Files skipped: {files_skipped}")
+
+def format_working_tree_file(formatter_cmd: str, file_path: str, verbose=False) -> bool:
+    """Format a single file in the working tree"""
+    
+    if not os.path.exists(file_path):
+        warn(f"File not found: {file_path}")
+        return False
+    
+    try:
+        # Read file content
+        with open(file_path, 'rb') as f:
+            original_content = f.read()
+        
+        # Prepare formatter command
+        command = formatter_cmd.replace('{}', file_path)
+        
+        if verbose:
+            info(f"Running: {command}")
+        
+        # Run formatter
+        result = subprocess.run(
+            command,
+            shell=True,
+            input=original_content,
+            capture_output=True
+        )
+        
+        if result.returncode != 0:
+            warn(f"Formatter failed for {file_path}: {result.stderr.decode('utf-8', errors='replace')}")
+            return False
+        
+        formatted_content = result.stdout
+        
+        # Only write if content changed
+        if formatted_content and formatted_content != original_content:
+            with open(file_path, 'wb') as f:
+                f.write(formatted_content)
+            return True
+        
+        return False
+        
+    except Exception as e:
+        warn(f"Error formatting {file_path}: {str(e)}")
+        return False
 
 # Run formatter on file in the git index. Creates a new git object with the
 # result, and replaces the content of the file in the index with that object.
@@ -88,6 +641,67 @@ def format_file_in_index(formatter, diff_entry, update_working_tree=True, write=
 
 file_path_placeholder = re.compile(r'\{\}')
 
+def format_object_piped(formatter_commands: List[str], object_hash: str, file_path: str, verbose=False):
+    """Run multiple formatters piped together on a git blob"""
+    
+    if not formatter_commands:
+        return object_hash
+    
+    # Start the pipeline with git cat-file
+    processes = []
+    get_content = subprocess.Popen(
+        ['git', 'cat-file', '-p', object_hash],
+        stdout=subprocess.PIPE
+    )
+    processes.append(get_content)
+    
+    # Chain formatters
+    prev_stdout = get_content.stdout
+    for i, command in enumerate(formatter_commands):
+        if verbose:
+            info(f"Piping through: {command}")
+        
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            stdin=prev_stdout,
+            stdout=subprocess.PIPE
+        )
+        processes.append(proc)
+        
+        # Close the previous stdout to allow it to receive SIGPIPE
+        prev_stdout.close()
+        prev_stdout = proc.stdout
+    
+    # Final process: git hash-object
+    write_object = subprocess.Popen(
+        ['git', 'hash-object', '-w', '--stdin'],
+        stdin=prev_stdout,
+        stdout=subprocess.PIPE
+    )
+    processes.append(write_object)
+    prev_stdout.close()
+    
+    # Wait for all processes and check for errors
+    for i, proc in enumerate(processes[:-1]):  # All but the last
+        exit_code = proc.wait()
+        # Ignore SIGPIPE (-13) which is expected when formatter doesn't read all input
+        # For example, 'echo' doesn't read stdin, so git cat-file gets SIGPIPE when
+        # trying to write to it. This is normal behavior and the pipeline still works.
+        if exit_code != 0 and exit_code != -13:
+            if i == 0:
+                raise ValueError(f'unable to read file content from object database: {object_hash}')
+            else:
+                raise Exception(f'formatter {i} exited with non-zero status: {formatter_commands[i-1]}')
+    
+    # Get the new hash from the last process
+    new_hash, err = write_object.communicate()
+    
+    if write_object.returncode != 0:
+        raise Exception('unable to write formatted content to object database')
+    
+    return new_hash.decode('utf-8').rstrip()
+
 # Run formatter on a git blob identified by its hash. Writes output to a new git
 # blob, and returns the hash of the new blob.
 def format_object(formatter, object_hash, file_path, verbose=False):
@@ -113,11 +727,15 @@ def format_object(formatter, object_hash, file_path, verbose=False):
     get_content.stdout.close()
     format_content.stdout.close()
 
-    if get_content.wait() != 0:
+    get_exit_code = get_content.wait()
+    # Ignore SIGPIPE (-13) which is expected when formatter doesn't read all input
+    # For example, 'echo' doesn't read stdin, so git cat-file gets SIGPIPE when
+    # trying to write to it. This is normal behavior and the pipeline still works.
+    if get_exit_code != 0 and get_exit_code != -13:
         raise ValueError('unable to read file content from object database: ' + object_hash)
 
     if format_content.wait() != 0:
-        raise Exception('formatter exited with non-zero status') # TODO: capture stderr from format command
+        raise Exception('formatter exited with non-zero status')
 
     new_hash, err = write_object.communicate()
 
@@ -202,25 +820,6 @@ def normalize_path(p, relative_to=None):
             os.path.join(relative_to, p) if relative_to else p
             )
 
-def matches_some_path(patterns, target):
-    is_match = False
-    for signed_pattern in patterns:
-        (is_pattern_positive, pattern) = from_signed_pattern(signed_pattern)
-        if fnmatch(target, normalize_path(pattern)):
-            is_match = is_pattern_positive
-    return is_match
-
-# Checks for a '!' as the first character of a pattern, returns the rest of the
-# pattern in a tuple. The tuple takes the form (is_pattern_positive, pattern).
-# For example:
-#     from_signed_pattern('!pat') == (False, 'pat')
-#     from_signed_pattern('pat') == (True, 'pat')
-def from_signed_pattern(pattern):
-    if pattern[0] == '!':
-        return (False, pattern[1:])
-    else:
-        return (True, pattern)
-
 class CustomArgumentParser(argparse.ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         args, argv = self.parse_known_args(args, namespace)
@@ -238,8 +837,11 @@ if __name__ == '__main__':
             )
     parser.add_argument(
             '--formatter', '-f',
-            required=True,
             help='Shell command to format files, will run once per file. Occurrences of the placeholder `{}` will be replaced with a path to the file being formatted. (Example: "prettier --stdin-filepath \'{}\'")'
+            )
+    parser.add_argument(
+            '--config',
+            help='Path to configuration file (.yml, .yaml, or .toml)'
             )
     parser.add_argument(
             '--no-update-working-tree',
@@ -250,6 +852,32 @@ if __name__ == '__main__':
             '--no-write',
             action='store_true',
             help='Prevents %(prog)s from modifying staged or working tree files. You can use this option to check staged changes with a linter instead of formatting. With this option stdout from the formatter command is ignored. Example: %(prog)s --no-write -f "eslint --stdin --stdin-filename \'{}\' >&2" "*.js"'
+            )
+    parser.add_argument(
+            '--unstaged',
+            action='store_true',
+            help='Format only unstaged changes in working tree'
+            )
+    parser.add_argument(
+            '--also-unstaged',
+            action='store_true',
+            help='Format both staged AND unstaged changes'
+            )
+    parser.add_argument(
+            '--files',
+            nargs='+',
+            help='Format specific files regardless of git status',
+            metavar='FILE'
+            )
+    parser.add_argument(
+            '--debug',
+            action='store_true',
+            help='Show detailed debug output including pattern matching decisions'
+            )
+    parser.add_argument(
+            '--dry-run',
+            action='store_true',
+            help='Preview what would be formatted without making changes'
             )
     parser.add_argument(
             '--version',
@@ -263,17 +891,118 @@ if __name__ == '__main__':
             action='store_true'
             )
     parser.add_argument(
-            'files',
-            nargs='+',
-            help='Patterns that specify files to format. The formatter will only transform staged files that are given here. Patterns may be literal file paths, or globs which will be tested against staged file paths using Python\'s fnmatch function. For example "src/*.js" will match all files with a .js extension in src/ and its subdirectories. Patterns may be negated to exclude files using a "!" character. Patterns are evaluated left-to-right. (Example: "main.js" "src/*.js" "test/*.js" "!test/todo/*")'
+            'patterns',
+            nargs='*',
+            help='Patterns that specify files to format. The formatter will only transform staged files that are given here. Patterns use gitignore syntax and are matched using the pathspec library. Examples: "*.js" matches all .js files, "src/**/*.py" matches Python files in src/, "!tests/*" excludes the tests directory.'
             )
+    
     args = parser.parse_args()
-    files = vars(args)['files']
-    format_staged_files(
-            file_patterns=files,
-            formatter=vars(args)['formatter'],
-            git_root=get_git_root(),
-            update_working_tree=not vars(args)['no_update_working_tree'],
-            write=not vars(args)['no_write'],
-            verbose=vars(args)['verbose']
+    
+    # Load configuration
+    config = None
+    if args.config:
+        config_path = Path(args.config)
+        if not config_path.exists():
+            fatal(f"Config file not found: {args.config}")
+        config = Config.from_file(config_path)
+    else:
+        # Try to find config file automatically
+        config_path = find_config_file()
+        if config_path:
+            config = Config.from_file(config_path)
+            if args.debug:
+                debug(f"Found config file: {config_path}")
+    
+    # Handle working tree formatting modes
+    if args.unstaged or args.also_unstaged or args.files:
+        # Working tree mode
+        if not args.formatter and not config:
+            fatal("No formatter specified. Use --formatter or create a config file.")
+        
+        formatter = args.formatter
+        if not formatter and config and config.formatters:
+            # Use first formatter from config if no formatter specified
+            first_formatter = next(iter(config.formatters.values()))
+            formatter = first_formatter.get('command', '')
+        
+        if not formatter:
+            fatal("No formatter command found.")
+        
+        git_root = get_git_root()
+        patterns = args.patterns
+        
+        if not patterns:
+            fatal("No file patterns specified. Provide patterns to format.")
+        
+        format_working_tree_files(
+            file_patterns=patterns,
+            formatter=formatter,
+            git_root=git_root,
+            unstaged_only=args.unstaged and not args.also_unstaged,
+            also_unstaged=args.also_unstaged,
+            specific_files=args.files,
+            verbose=args.verbose,
+            debug_mode=args.debug
+        )
+    else:
+        # Staged files mode (default)
+        if not args.formatter and not config:
+            fatal("No formatter specified. Use --formatter or create a config file.")
+        
+        formatter = args.formatter
+        patterns = args.patterns
+        
+        if not formatter and config and config.formatters:
+            # Use config file formatters
+            if args.debug:
+                debug("Using formatters from config file")
+            
+            git_root = get_git_root()
+            
+            # Build formatter objects with their pattern specs
+            formatters = []
+            for name, formatter_config in config.formatters.items():
+                formatter_cmd = formatter_config.get('command', '')
+                formatter_patterns = formatter_config.get('patterns', ['*'])
+                
+                if not formatter_cmd:
+                    warn(f"Formatter '{name}' has no command specified")
+                    continue
+                
+                formatters.append({
+                    'name': name,
+                    'command': formatter_cmd,
+                    'patterns': formatter_patterns,
+                    'spec': create_pattern_spec(formatter_patterns)
+                })
+            
+            if formatters:
+                # Process all staged files once, applying all matching formatters
+                format_staged_files_with_formatters(
+                    formatters=formatters,
+                    git_root=git_root,
+                    update_working_tree=not args.no_update_working_tree,
+                    write=not args.no_write and not args.dry_run,
+                    verbose=args.verbose or config.show_commands,
+                    debug_mode=args.debug or config.debug
+                )
+        else:
+            # Use command line formatter
+            if not formatter:
+                fatal("No formatter specified")
+            
+            if not patterns:
+                fatal("No file patterns specified. Provide patterns to format.")
+            
+            git_root = get_git_root()
+            
+            format_staged_files(
+                file_patterns=patterns,
+                formatter=formatter,
+                git_root=git_root,
+                update_working_tree=not args.no_update_working_tree,
+                write=not args.no_write and not args.dry_run,
+                verbose=args.verbose,
+                debug_mode=args.debug,
+                config=config
             )

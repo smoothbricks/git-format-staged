@@ -1,0 +1,19 @@
+# Define common patterns as anchors
+common_patterns: &common
+  - src/**/*.js
+  - src/**/*.ts
+  - "!node_modules/**"
+  - "!dist/**"
+
+# Define base formatter config
+base_formatter: &base
+  patterns: *common
+
+formatters:
+  uppercase:
+    <<: *base  # Merge base config
+    command: tr '[:lower:]' '[:upper:]'
+  
+  exclaim:
+    command: sed 's/$/ !/'
+    patterns: *common  # Reference the common patterns

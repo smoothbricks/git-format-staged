@@ -1,0 +1,3 @@
+[formatters.test-formatter]
+command = "sed 's/hello/goodbye/g'"
+patterns = ["**/*.py"]

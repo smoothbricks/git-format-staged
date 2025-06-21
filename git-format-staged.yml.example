@@ -1,0 +1,60 @@
+version: 1
+debug: false
+
+# Define reusable pattern sets
+pattern_sets:
+  javascript:
+    - "*.js"
+    - "*.jsx"
+    - "*.ts"
+    - "*.tsx"
+    - "!node_modules/**"
+    - "!dist/**"
+    - "!build/**"
+  
+  python:
+    - "*.py"
+    - "!venv/**"
+    - "!.venv/**"
+    - "!.tox/**"
+  
+  tests:
+    - "test/**/*.js"
+    - "test/**/*.py"
+    - "!test/fixtures/**"
+
+# Formatters configuration
+formatters:
+  # Using pattern inheritance
+  prettier:
+    command: "prettier --stdin-filepath '{}'"
+    extends: javascript  # Inherit javascript patterns
+    patterns:
+      - "*.json"
+      - "*.md"
+      - "*.yml"
+    
+  black:
+    command: "black -"
+    extends: python  # Use only python patterns
+    
+  rustfmt:
+    command: "rustfmt --emit=stdout"
+    patterns:
+      - "*.rs"
+      - "!target/**"
+  
+  # eslint with auto-fix - extends multiple pattern sets
+  eslint-fix:
+    command: "eslint --fix-dry-run --stdin --stdin-filename '{}'"
+    extends: [javascript, tests]  # Inherit from multiple sets
+  
+  # Note: When multiple formatters match the same file, they are applied
+  # in sequence. The output of one formatter becomes the input of the next.
+
+# Global settings
+settings:
+  update_working_tree: true
+  parallel: false  # Run formatters in parallel where possible (future feature)
+  continue_on_error: false
+  show_commands: true  # Always show commands being run

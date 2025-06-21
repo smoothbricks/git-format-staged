@@ -33,27 +33,38 @@ patch step can be disabled with the `--no-update-working-tree` option.
 [prettier]: https://prettier.io/
 [husky]: https://www.npmjs.com/package/husky
 
+## Version 4 Features
+
+git-format-staged v4 introduces several major enhancements:
+
+- **Proper gitignore-style pattern matching**: Uses the `pathspec` library for correct pattern handling
+- **Configuration file support**: Define formatters in YAML or TOML files
+- **Multiple formatter support**: Apply multiple formatters to the same file in a pipeline
+- **Enhanced debugging**: Comprehensive debug output with `--debug`
+- **Working tree formatting**: Format unstaged changes with `--unstaged` or `--also-unstaged`
+- **Improved performance**: Files are processed once with all matching formatters applied in sequence
+
 ## How to install
 
 ### Install with Nix
 
 Install via the CLI:
 
-    $ nix profile install github:hallettj/git-format-staged
+    $ nix profile add github:hallettj/git-format-staged
 
 Or add to your flake imports, and use the `default` package output.
 
 ### Install with NPM
 
-Requires Python 3.8 or later.
+Requires Python 3.8 or later, and the `pathspec` library.
 
 Install as a development dependency in a project that uses npm packages:
 
-    $ npm install --save-dev git-format-staged
+    $ npm install --save-dev @smoothbricks/git-format-staged
 
 Or install globally:
 
-    $ npm install --global git-format-staged
+    $ npm install --global @smoothbricks/git-format-staged
 
 ### Or just copy the script
 
@@ -64,11 +75,17 @@ If you do not use the above methods you can copy the
 place it in your executable path. The script is MIT-licensed - so you can check
 the script into version control in your own open source project if you wish.
 
+Note: You'll need to install the Python `pathspec` library:
+
+    $ pip install pathspec pyyaml toml
+
 ## How to use
 
 For detailed information run:
 
     $ git-format-staged --help
+
+### Command Line Usage
 
 The command expects a shell command to run a formatter, and one or more file
 patterns to identify which files should be formatted. For example:
@@ -76,68 +93,256 @@ patterns to identify which files should be formatted. For example:
     $ git-format-staged --formatter 'prettier --stdin-filepath "{}"' 'src/*.js'
 
 That will format all files under `src/` and its subdirectories using
-`prettier`. The file pattern is tested against staged files using Python's
-[`fnmatch`][] function: each `*` will match nested directories in addition to
-file names.
+`prettier`. The file patterns use gitignore-style matching via the `pathspec`
+library.
 
-[`fnmatch`]: https://docs.python.org/3/library/fnmatch.html#fnmatch.fnmatch
+### Configuration Files
 
-The formatter command must read file content from `stdin`, and output formatted
-content to `stdout`.
+git-format-staged v4 supports configuration files in YAML or TOML format. Create
+a `.git-format-staged.yml` or `.git-format-staged.toml` file in your project
+root:
 
-Note that the syntax of the `fnmatch` glob match is a is a bit different from
-normal shell globbing. So if you need to match multiple patterns, you should
-pass multiple arguments with different patterns, and they will be grouped.
-So instead of e.g. `'src/**/*.{js,jsx,ts}'`, you would use:
+#### YAML Example (.git-format-staged.yml)
 
-    $ git-format-staged --formatter 'prettier --stdin-filepath "{}"' 'src/*.js' 'src/*.jsx' 'src/*.ts'
+```yaml
+formatters:
+  prettier:
+    command: "prettier --stdin-filepath '{}'"
+    patterns:
+      - "*.js"
+      - "*.jsx"
+      - "*.ts"
+      - "*.tsx"
+      - "!node_modules/**"
+      - "!dist/**"
+  
+  eslint-fix:
+    command: "eslint --fix --stdin --stdin-filename '{}'"
+    patterns:
+      - "*.js"
+      - "*.jsx"
+      - "!*.test.js"
 
-Files can be excluded by prefixing a pattern with `!`. For example:
+  black:
+    command: "black -"
+    patterns:
+      - "*.py"
+      - "!venv/**"
 
-    $ git-format-staged --formatter 'prettier --stdin-filepath "{}"' '*.js' '!flow-typed/*'
+settings:
+  update_working_tree: true
+  show_commands: false
+```
 
-Patterns are evaluated from left-to-right: if a file matches multiple patterns
-the right-most pattern determines whether the file is included or excluded.
+#### TOML Example (.git-format-staged.toml)
 
-git-format-staged never operates on files that are excluded from version
-control. So it is not necessary to explicitly exclude stuff like
-`node_modules/`.
+```toml
+version = 1
+debug = false
 
-The formatter command may include a placeholder, `{}`, which will be replaced
-with the path of the file that is being formatted. This is useful if your
-formatter needs to know the file extension to determine how to format or to
-lint each file. For example:
+[formatters.prettier]
+command = "prettier --stdin-filepath '{}'"
+patterns = [
+  "*.js",
+  "*.jsx", 
+  "*.ts",
+  "*.tsx",
+  "!node_modules/**",
+  "!dist/**"
+]
 
-    $ git-format-staged -f 'prettier --stdin-filepath "{}"' '*.js' '*.css'
+[formatters.black]
+command = "black -"
+patterns = [
+  "*.py",
+  "!venv/**",
+  "!.venv/**"
+]
 
-Do not attempt to read or write to `{}` in your formatter command! The
-placeholder exists only for referencing the file name and path.
+[settings]
+update_working_tree = true
+show_commands = false
+```
 
-### Check staged changes with a linter without formatting
+With a configuration file, you can simply run:
 
-Perhaps you do not want to reformat files automatically; but you do want to
-prevent files from being committed if they do not conform to style rules. You
-can use git-format-staged with the `--no-write` option, and supply a lint
-command instead of a format command. Here is an example using ESLint:
+    $ git-format-staged
 
-    $ git-format-staged --no-write -f 'eslint --stdin --stdin-filename "{}" >&2' 'src/*.js'
+### Multiple Formatters
 
-If this command is run in a pre-commit hook, and the lint command fails the
-commit will be aborted and error messages will be displayed. The lint command
-must read file content via `stdin`. Anything that the lint command outputs to
-`stdout` will be ignored. In the example above `eslint` is given the `--stdin`
-option to tell it to read content from `stdin` instead of reading files from
-disk, and messages from `eslint` are redirected to `stderr` (using the `>&2`
-notation) so that you can see them.
+When multiple formatters match the same file, they are applied in sequence as
+a pipeline. The output of one formatter becomes the input of the next:
 
-### Set up a pre-commit hook with Husky
+```yaml
+formatters:
+  # First, format with prettier
+  prettier:
+    command: "prettier --stdin-filepath '{}'"
+    patterns: ["*.js"]
+  
+  # Then run eslint --fix
+  eslint-fix:
+    command: "eslint --fix --stdin --stdin-filename '{}'"
+    patterns: ["*.js"]
+```
+
+### Pattern Sets and Inheritance
+
+You can define reusable pattern sets and use `extends` to inherit patterns:
+
+```yaml
+# Define reusable pattern sets
+pattern_sets:
+  common:
+    - "src/**/*.js"
+    - "src/**/*.ts"
+    - "!node_modules/**"
+    - "!dist/**"
+  
+  tests:
+    - "test/**/*.js"
+    - "test/**/*.spec.ts"
+    - "!test/fixtures/**"
+
+formatters:
+  prettier:
+    command: "prettier --stdin-filepath '{}'"
+    extends: [common, tests]  # Inherit from multiple sets
+    patterns:  # Additional patterns
+      - "*.json"
+      - "*.yml"
+  
+  eslint:
+    command: "eslint --fix --stdin --stdin-filename '{}'"
+    extends: common  # Single inheritance
+    patterns:
+      - "test/**/*.js"  # Add more patterns
+```
+
+The same works in TOML:
+
+```toml
+[pattern_sets]
+common = [
+  "src/**/*.js",
+  "src/**/*.ts", 
+  "!node_modules/**",
+  "!dist/**"
+]
+
+tests = [
+  "test/**/*.js",
+  "test/**/*.spec.ts",
+  "!test/fixtures/**"
+]
+
+[formatters.prettier]
+command = "prettier --stdin-filepath '{}'"
+extends = ["common", "tests"]
+patterns = ["*.json", "*.yml"]
+```
+
+When using `extends`:
+- Patterns from all extended sets are merged in order
+- Additional patterns in the formatter are appended
+- All patterns are flattened into a single list
+
+### YAML Anchors and Pattern Sets
+
+Both YAML anchors and pattern sets can be used for pattern reuse, but they work differently:
+
+#### YAML Anchors (YAML only)
+```yaml
+# Define patterns with YAML anchor
+common_patterns: &common
+  - "*.js"
+  - "*.ts"
+  - "!node_modules/**"
+
+formatters:
+  # Direct alias reference - replaces entire patterns list
+  formatter1:
+    command: "prettier --stdin-filepath '{}'"
+    patterns: *common
+  
+  # Anchor in list - creates nested list (automatically flattened)
+  formatter2:
+    command: "eslint --fix-dry-run --stdin --stdin-filename '{}'"
+    patterns:
+      - *common      # Flattened automatically
+      - "*.json"     # Additional patterns
+```
+
+#### Pattern Sets vs YAML Anchors
+- **Pattern Sets**: Work in both YAML and TOML, designed for pattern inheritance
+- **YAML Anchors**: YAML-only feature, more flexible but can be confusing with lists
+- **Glob patterns**: Patterns like `*myfile` or `!*test*` are treated as glob patterns, not YAML aliases (unless a matching anchor exists)
+
+#### Special Characters in Patterns
+Patterns starting with `*`, `!`, `&`, etc. are automatically handled:
+- If a pattern like `*common` has a matching anchor `&common`, it's treated as a YAML alias
+- Otherwise, it's treated as a glob pattern (e.g., `*myfile` matches files ending with "myfile")
+- No manual quoting needed - the tool handles this automatically
+
+### Pattern Matching
+
+Patterns use gitignore-style syntax:
+- `*.js` matches all .js files recursively
+- `src/**/*.js` matches .js files under src/
+- `!vendor/**` excludes all files under vendor/
+- `*.test.js` matches test files
+- `!*.test.js` excludes test files
+
+Files can be excluded by prefixing a pattern with `!`. Patterns are evaluated
+in order: if a file matches multiple patterns, all matching patterns are
+considered, with exclusions taking precedence.
+
+### Working Tree Formatting
+
+Format unstaged changes instead of staged changes:
+
+    $ git-format-staged --unstaged --formatter 'black -' '*.py'
+
+Format both staged and unstaged changes:
+
+    $ git-format-staged --also-unstaged --formatter 'prettier --stdin-filepath "{}"' '*.js'
+
+### Debugging
+
+Use `--debug` to see detailed information about pattern matching and formatter
+execution:
+
+    $ git-format-staged --debug
+
+## Breaking Changes in v4
+
+### Pattern Matching
+- **Old behavior**: Used Python's `fnmatch` which had bugs with absolute path conversion
+- **New behavior**: Uses `pathspec` library for proper gitignore-style matching
+- **Migration**: Patterns should work the same, but edge cases are now handled correctly
+
+### Multiple Formatters
+- **Old behavior**: Only one formatter could be specified
+- **New behavior**: Config files can define multiple formatters that run in sequence
+- **Migration**: Command-line usage remains the same for single formatters
+
+### Configuration Files
+- **New feature**: YAML/TOML config files are now supported
+- **Migration**: Not required - command-line usage still works
+
+### Performance
+- **Old behavior**: Each formatter was run separately for each file
+- **New behavior**: All formatters for a file run in a single pipeline
+- **Impact**: Significantly faster when using multiple formatters
+
+## Set up a pre-commit hook with Husky
 
 Follow these steps to automatically format all Javascript files on commit in
 a project that uses npm.
 
 Install git-format-staged, husky, and a formatter (I use `prettier`):
 
-    $ npm install --save-dev git-format-staged husky prettier
+    $ npm install --save-dev @smoothbricks/git-format-staged husky prettier
 
 Add a `prepare` script to install husky when running `npm install`:
 

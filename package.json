@@ -1,5 +1,5 @@
 {
-  "name": "git-format-staged",
+  "name": "@smoothbricks/git-format-staged",
   "version": "0.0.0-development",
   "description": "Git command to transform staged files according to a command that accepts file content on stdin and produces output on stdout.",
   "scripts": {
@@ -8,25 +8,43 @@
     "semantic-release": "semantic-release"
   },
   "bin": {
-    "git-format-staged": "git-format-staged"
+    "git-format-staged": "git-format-staged",
+    "git-format-all": "git-format-all"
   },
   "main": "./no-main.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hallettj/git-format-staged.git"
+    "url": "https://github.com/smoothbricks/git-format-staged.git"
   },
   "keywords": [
     "git",
-    "hook"
+    "hook",
+    "formatter",
+    "pre-commit",
+    "prettier",
+    "black",
+    "rustfmt",
+    "staged",
+    "format",
+    "pathspec",
+    "gitignore"
   ],
   "author": "Jesse Hallett <jesse@sitr.us>",
+  "contributors": [
+    "Danny @SmoothBricks"
+  ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/hallettj/git-format-staged/issues"
+    "url": "https://github.com/smoothbricks/git-format-staged/issues"
   },
-  "homepage": "https://github.com/hallettj/git-format-staged#readme",
+  "homepage": "https://github.com/smoothbricks/git-format-staged#readme",
   "files": [
-    "git-format-staged"
+    "git-format-staged",
+    "git-format-all",
+    ".git-format-staged.yml.example",
+    ".git-format-staged.toml.example",
+    "completions/",
+    "BREAKING_CHANGES.md"
   ],
   "devDependencies": {
     "@commitlint/cli": "^19.0.3",

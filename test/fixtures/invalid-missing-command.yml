@@ -1,0 +1,3 @@
+formatters:
+  bad-formatter:
+    patterns: ["*.js"]

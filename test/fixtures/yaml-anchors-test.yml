@@ -1,0 +1,38 @@
+# Test YAML anchors and aliases with patterns
+common_patterns: &common
+  - "*.js"
+  - "*.ts"
+  - "!node_modules/**"
+
+formatters:
+  # Test 1: Direct alias reference (should work)
+  formatter1:
+    command: cat
+    patterns: *common
+  
+  # Test 2: Alias at start of list item (creates nested list, automatically flattened)
+  formatter2:
+    command: cat
+    patterns:
+      - *common
+      - "*.json"
+  
+  # Test 3: File pattern that looks like alias
+  formatter3:
+    command: cat
+    patterns:
+      - "*.js"
+      - "*myfile"  # This should be treated as a glob pattern, not YAML alias
+      - "!*test*"   # This should also be a pattern
+  
+  # Test 4: Actual YAML anchor definition in patterns
+  formatter4:
+    command: cat
+    patterns: &formatter4_patterns
+      - "*.py"
+      - "*.pyx"
+  
+  # Test 5: Reference to formatter4's patterns
+  formatter5:
+    command: cat
+    patterns: *formatter4_patterns

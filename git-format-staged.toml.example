@@ -1,0 +1,98 @@
+# git-format-staged configuration file (TOML format)
+# Place this file as .git-format-staged.toml in your project root
+
+version = 1
+debug = false
+
+# Define reusable pattern sets
+[pattern_sets]
+javascript = [
+  "*.js",
+  "*.jsx",
+  "*.ts",
+  "*.tsx",
+  "!node_modules/**",
+  "!dist/**",
+  "!build/**"
+]
+
+python = [
+  "*.py",
+  "!venv/**",
+  "!.venv/**",
+  "!.tox/**",
+  "!*_pb2.py"  # Exclude protobuf generated files
+]
+
+tests = [
+  "test/**/*.js",
+  "test/**/*.py",
+  "spec/**/*.js",
+  "!test/fixtures/**"
+]
+
+docs = [
+  "*.md",
+  "docs/**/*",
+  "!docs/generated/**"
+]
+
+# Formatters configuration
+[formatters.prettier]
+command = "prettier --stdin-filepath '{}'"
+extends = ["javascript", "docs"]  # Inherit from multiple pattern sets
+patterns = [
+  "*.json",
+  "*.css",
+  "*.scss",
+  "*.html"
+]
+
+[formatters.black]
+command = "black -"
+extends = "python"  # Single inheritance
+
+[formatters.rustfmt]
+command = "rustfmt --emit=stdout"
+patterns = [
+  "*.rs",
+  "!target/**"
+]
+
+[formatters.gofmt]
+command = "gofmt"
+patterns = [
+  "*.go",
+  "!vendor/**",
+  "!*.pb.go"  # Exclude protobuf generated files
+]
+
+[formatters.shfmt]
+command = "shfmt -i 2 -ci"  # 2 space indent, indent case statements
+patterns = [
+  "*.sh",
+  "*.bash",
+  "!node_modules/**"
+]
+
+[formatters.terraform]
+command = "terraform fmt -"
+patterns = [
+  "*.tf",
+  "*.tfvars",
+  "!.terraform/**"
+]
+
+# Example of using eslint with --fix-dry-run for stdin mode
+[formatters.eslint-fix]
+command = "eslint --fix-dry-run --stdin --stdin-filename '{}'"
+extends = ["javascript", "tests"]  # Lint both source and test files
+# No additional patterns needed - just uses inherited ones
+
+# Note: When multiple formatters match the same file, they are applied
+# in sequence. The output of one formatter becomes the input of the next.
+
+# Global settings
+[settings]
+update_working_tree = true  # Apply formatting changes to working tree files
+show_commands = false       # Always show commands being run (like --verbose)

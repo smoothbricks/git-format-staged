@@ -1,0 +1,7 @@
+formatters:
+  test:
+    command: sed 's/$/ FORMATTED/'
+    patterns:
+      - src/**/*.js
+      - !src/vendor/**/*
+      - !*.md

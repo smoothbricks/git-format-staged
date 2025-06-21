@@ -1,0 +1,7 @@
+formatters:
+  uppercase:
+    command: "tr '[:lower:]' '[:upper:]'"
+    patterns: ["*.txt"]
+  exclaim:
+    command: "sed 's/$/ !!/'"
+    patterns: ["*.txt"]

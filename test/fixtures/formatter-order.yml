@@ -1,0 +1,7 @@
+formatters:
+  prefix:
+    command: sed 's/^/PREFIX-/'
+    patterns: ["*.txt"]
+  suffix:
+    command: sed 's/$/-SUFFIX/'
+    patterns: ["*.txt"]

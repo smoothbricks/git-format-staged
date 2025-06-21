@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# git-format-all - format both staged and unstaged changes
+exec git-format-staged --also-unstaged "$@"

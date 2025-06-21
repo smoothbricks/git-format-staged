@@ -1,0 +1,6 @@
+formatters:
+  uppercase:
+    command: tr '[:lower:]' '[:upper:]'
+    patterns:
+      - *.txt
+      - !ignore_*.txt

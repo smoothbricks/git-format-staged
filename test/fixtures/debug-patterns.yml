@@ -1,0 +1,6 @@
+formatters:
+  test:
+    command: cat
+    patterns:
+      - src/**/*.js
+      - !src/vendor/**

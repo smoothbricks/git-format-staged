@@ -1,0 +1,7 @@
+formatters:
+  bad-formatter:
+    command: "cat"
+    patterns: [
+      "*.js"
+      "*.py"  # missing comma
+    ]

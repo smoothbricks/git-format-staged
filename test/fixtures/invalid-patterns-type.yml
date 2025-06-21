@@ -1,0 +1,4 @@
+formatters:
+  bad-formatter:
+    command: "cat"
+    patterns: "*.js"  # Should be a list, not string

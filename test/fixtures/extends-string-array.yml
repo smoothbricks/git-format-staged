@@ -1,0 +1,13 @@
+pattern_sets:
+  set1:
+    - "*.txt"
+  set2:
+    - "*.md"
+
+formatters:
+  formatter1:
+    command: cat
+    extends: set1  # String
+  formatter2:
+    command: cat
+    extends: [set1, set2]  # Array
