@@ -2,6 +2,7 @@ import { ChildProcess, SpawnOptionsWithoutStdio, spawn } from 'child_process'
 import * as fs from 'fs-extra'
 import { dirname, join, resolve } from 'path'
 import * as tmp from 'tmp'
+import { loadFixture } from './fixtures'
 
 export type Result = {
   exitCode: number,
@@ -173,4 +174,32 @@ function tmpDir (): Promise<{ path: Path, cleanup: () => void }> {
       }
     })
   })
+}
+
+/*
+ * Helper to create a config file and test files
+ */
+export async function setupConfigAndFiles(r: Repo, configFixture: string, files: Record<string, string>) {
+  await setContent(r, '.git-format-staged.yml', await loadFixture(configFixture))
+  
+  for (const [filePath, content] of Object.entries(files)) {
+    await setContent(r, filePath, content)
+    await stage(r, filePath)
+  }
+}
+
+/*
+ * Helper to create and stage multiple files, creating directories as needed
+ */
+export async function createAndStageFiles(r: Repo, files: Record<string, string>) {
+  for (const [filePath, content] of Object.entries(files)) {
+    // Create directory if needed
+    const dir = dirname(filePath)
+    if (dir !== '.') {
+      await fs.mkdirp(join(r.path, dir))
+    }
+    
+    await setContent(r, filePath, content)
+    await stage(r, filePath)
+  }
 }

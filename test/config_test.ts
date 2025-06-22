@@ -9,7 +9,9 @@ import {
   git,
   setContent,
   stage,
-  testRepo
+  testRepo,
+  setupConfigAndFiles,
+  createAndStageFiles
 } from './helpers/git'
 import { loadFixture } from './helpers/fixtures'
 
@@ -30,12 +32,10 @@ test.afterEach(t => {
 test('loads YAML config file and respects patterns', async t => {
   const r = repo(t)
   
-  await setContent(r, '.git-format-staged.yml', await loadFixture('basic-config.yml'))
-  
-  await setContent(r, 'test.py', 'hello world')
-  await setContent(r, 'test.js', 'hello world')
-  await stage(r, 'test.py')
-  await stage(r, 'test.js')
+  await setupConfigAndFiles(r, 'basic-config.yml', {
+    'test.py': 'hello world',
+    'test.js': 'hello world'
+  })
   
   const { stdout } = await formatStaged(r, '--verbose')
   
@@ -112,20 +112,11 @@ test('debug output shows pattern matching decisions', async t => {
   
   await setContent(r, '.git-format-staged.yml', await loadFixture('debug-patterns.yml'))
   
-  // Create directories first
-  const fs2 = require('fs-extra')
-  const path2 = require('path')
-  
-  await fs2.mkdirp(path2.join(r.path, 'src'))
-  await fs2.mkdirp(path2.join(r.path, 'src/vendor'))
-  
-  await setContent(r, 'src/app.js', 'app code')
-  await setContent(r, 'src/vendor/lib.js', 'vendor code')
-  await setContent(r, 'test.js', 'test code')
-  
-  await stage(r, 'src/app.js')
-  await stage(r, 'src/vendor/lib.js')
-  await stage(r, 'test.js')
+  await createAndStageFiles(r, {
+    'src/app.js': 'app code',
+    'src/vendor/lib.js': 'vendor code',
+    'test.js': 'test code'
+  })
   
   const { stdout, stderr } = await formatStaged(r, '--debug')
   
@@ -140,37 +131,15 @@ test('debug output shows pattern matching decisions', async t => {
 })
 
 test('validates config file and reports errors', async t => {
-  const r = repo(t)
-  
-  // Missing command
-  await setContent(r, '.git-format-staged.yml', await loadFixture('invalid-missing-command.yml'))
-  
-  const { exitCode, stderr } = await formatStagedCaptureError(r, '')
-  
-  t.true(exitCode > 0)
-  t.regex(stderr, /missing required 'command' field/)
+  await testConfigError(t, 'invalid-missing-command.yml', /missing required 'command' field/)
 })
 
 test('validates invalid patterns type', async t => {
-  const r = repo(t)
-  
-  await setContent(r, '.git-format-staged.yml', await loadFixture('invalid-patterns-type.yml'))
-  
-  const { exitCode, stderr } = await formatStagedCaptureError(r, '')
-  
-  t.true(exitCode > 0)
-  t.regex(stderr, /patterns must be a list/)
+  await testConfigError(t, 'invalid-patterns-type.yml', /patterns must be a list/)
 })
 
 test('handles invalid YAML syntax', async t => {
-  const r = repo(t)
-  
-  await setContent(r, '.git-format-staged.yml', await loadFixture('invalid-syntax.yml'))
-  
-  const { exitCode, stderr } = await formatStagedCaptureError(r, '')
-  
-  t.true(exitCode > 0)
-  t.regex(stderr, /Error parsing config file/)
+  await testConfigError(t, 'invalid-syntax.yml', /Error parsing config file/)
 })
 
 test('pathspec patterns work correctly', async t => {
@@ -178,27 +147,13 @@ test('pathspec patterns work correctly', async t => {
   
   await setContent(r, '.git-format-staged.yml', await loadFixture('pathspec-patterns.yml'))
   
-  // Create test files - need to create directories first
-  const fs = require('fs-extra')
-  const path = require('path')
-  
-  await fs.mkdirp(path.join(r.path, 'src'))
-  await fs.mkdirp(path.join(r.path, 'src/components'))
-  await fs.mkdirp(path.join(r.path, 'src/vendor'))
-  await fs.mkdirp(path.join(r.path, 'tests'))
-  
-  await setContent(r, 'src/app.js', 'app')
-  await setContent(r, 'src/components/Button.js', 'button')
-  await setContent(r, 'src/vendor/lib.js', 'vendor')
-  await setContent(r, 'tests/test.js', 'test')
-  await setContent(r, 'README.md', 'readme')
-  
-  // Stage all files
-  await stage(r, 'src/app.js')
-  await stage(r, 'src/components/Button.js')
-  await stage(r, 'src/vendor/lib.js')
-  await stage(r, 'tests/test.js')
-  await stage(r, 'README.md')
+  await createAndStageFiles(r, {
+    'src/app.js': 'app',
+    'src/components/Button.js': 'button',
+    'src/vendor/lib.js': 'vendor',
+    'tests/test.js': 'test',
+    'README.md': 'readme'
+  })
   
   await formatStaged(r, '')
   
@@ -215,17 +170,10 @@ test('YAML anchors and aliases work correctly', async t => {
   
   await setContent(r, '.git-format-staged.yml', await loadFixture('yaml-anchors.yml'))
   
-  // Create test files
-  const fs = require('fs-extra')
-  const path = require('path')
-  await fs.mkdirp(path.join(r.path, 'src'))
-  await fs.mkdirp(path.join(r.path, 'node_modules'))
-  
-  await setContent(r, 'src/app.js', 'const x = 1')
-  await setContent(r, 'node_modules/lib.js', 'const y = 2')
-  
-  await stage(r, 'src/app.js')
-  await stage(r, 'node_modules/lib.js')
+  await createAndStageFiles(r, {
+    'src/app.js': 'const x = 1',
+    'node_modules/lib.js': 'const y = 2'
+  })
   
   const { stdout } = await formatStaged(r, '--verbose')
   
@@ -239,37 +187,71 @@ test('YAML anchors and aliases work correctly', async t => {
 })
 
 test('YAML and TOML configs produce identical results', async t => {
-  // Test with YAML
-  const yamlRepo = await testRepo()
-  await setContent(yamlRepo, 'dummy.txt', 'dummy content')
-  await stage(yamlRepo, 'dummy.txt')
-  await git(yamlRepo, 'commit', '-m', 'initial commit')
+  // Helper to test a config format
+  async function testConfigFormat(configFixture: string): Promise<string> {
+    const r = await testRepo()
+    
+    // Create initial commit
+    await setContent(r, 'dummy.txt', 'dummy content')
+    await stage(r, 'dummy.txt')
+    await git(r, 'commit', '-m', 'initial commit')
+    
+    // Set up config and test file
+    const configFile = configFixture.endsWith('.yml') ? '.git-format-staged.yml' : '.git-format-staged.toml'
+    await setContent(r, configFile, await loadFixture(configFixture))
+    await setContent(r, 'test.txt', 'hello world')
+    await stage(r, 'test.txt')
+    
+    // Run formatter
+    await formatStaged(r, '')
+    const content = await getStagedContent(r, 'test.txt')
+    
+    cleanup(r)
+    return content
+  }
   
-  await setContent(yamlRepo, '.git-format-staged.yml', await loadFixture('multiple-formatters.yml'))
-  await setContent(yamlRepo, 'test.txt', 'hello world')
-  await stage(yamlRepo, 'test.txt')
-  await formatStaged(yamlRepo, '')
-  const yamlContent = await getStagedContent(yamlRepo, 'test.txt')
-  
-  // Test with TOML
-  const tomlRepo = await testRepo()
-  await setContent(tomlRepo, 'dummy.txt', 'dummy content')
-  await stage(tomlRepo, 'dummy.txt')
-  await git(tomlRepo, 'commit', '-m', 'initial commit')
-  
-  await setContent(tomlRepo, '.git-format-staged.toml', await loadFixture('multiple-formatters.toml'))
-  await setContent(tomlRepo, 'test.txt', 'hello world')
-  await stage(tomlRepo, 'test.txt')
-  await formatStaged(tomlRepo, '')
-  const tomlContent = await getStagedContent(tomlRepo, 'test.txt')
+  const yamlContent = await testConfigFormat('multiple-formatters.yml')
+  const tomlContent = await testConfigFormat('multiple-formatters.toml')
   
   // Both should produce the same result
   t.is(yamlContent, tomlContent)
   t.is(yamlContent.trim(), 'HELLO WORLD !!')
+})
+
+// Test that readonly formatters work correctly
+async function testReadonlyFormatter(t: any, fixtureName: string) {
+  const r = repo(t)
   
-  // Cleanup
-  cleanup(yamlRepo)
-  cleanup(tomlRepo)
+  await setupConfigAndFiles(r, fixtureName, {
+    'test.txt': 'hello world'
+  })
+  
+  await formatStaged(r, '')
+  
+  // File should be modified by formatter but not by checker
+  const content = await getStagedContent(r, 'test.txt')
+  t.is(content.trim(), 'goodbye world')
+}
+
+test('readonly formatter checks but does not modify files', async t => {
+  await testReadonlyFormatter(t, 'readonly-formatter.yml')
+})
+
+test('no_write alias works the same as readonly', async t => {
+  await testReadonlyFormatter(t, 'no-write-formatter.yml')
+})
+
+test('readonly formatter fails commit when check fails', async t => {
+  const r = repo(t)
+  
+  await setupConfigAndFiles(r, 'readonly-formatter-fail.yml', {
+    'test.txt': 'hello world'
+  })
+  
+  const { exitCode, stderr } = await formatStagedCaptureError(r, '')
+  
+  t.true(exitCode > 0)
+  t.regex(stderr, /failed|exited with non-zero status/)
 })
 
 // Helpers for working with context
@@ -279,4 +261,16 @@ function setRepo (repo: Repo, t: any) {
 
 function repo (t: any): Repo {
   return t.context.repo
+}
+
+
+// Helper to test formatter validation errors
+async function testConfigError(t: any, configFixture: string, expectedError: RegExp) {
+  const r = repo(t)
+  await setContent(r, '.git-format-staged.yml', await loadFixture(configFixture))
+  
+  const { exitCode, stderr } = await formatStagedCaptureError(r, '')
+  
+  t.true(exitCode > 0)
+  t.regex(stderr, expectedError)
 }

@@ -1,0 +1,8 @@
+formatters:
+  formatter:
+    command: sed 's/hello/goodbye/g'
+    patterns: ["*.txt"]
+  checker:
+    command: "grep -q goodbye"
+    patterns: ["*.txt"]
+    no_write: true

@@ -1,0 +1,6 @@
+formatters:
+  # Just a readonly formatter that checks
+  checker:
+    command: "grep -q hello"
+    patterns: ["*.txt"]
+    readonly: true

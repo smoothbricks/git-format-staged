@@ -1,0 +1,5 @@
+formatters:
+  checker:
+    command: "grep -q nonexistent"
+    patterns: ["*.txt"]
+    readonly: true

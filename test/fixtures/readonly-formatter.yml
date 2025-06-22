@@ -1,0 +1,11 @@
+formatters:
+  # Regular formatter that modifies files
+  formatter:
+    command: sed 's/hello/goodbye/g'
+    patterns: ["*.txt"]
+  
+  # Readonly formatter that checks but doesn't modify
+  checker:
+    command: grep -q goodbye
+    patterns: ["*.txt"]
+    readonly: true

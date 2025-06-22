@@ -90,6 +90,12 @@ command = "eslint-stdout '{}'"
 extends = ["javascript", "tests"]  # Lint both source and test files
 # No additional patterns needed - just uses inherited ones
 
+# Example of linter that prevents commit on errors (readonly mode)
+[formatters.eslint-check]
+command = "eslint --stdin --stdin-filename '{}' >&2"
+extends = "javascript"
+readonly = true  # Run linter but don't modify files
+
 # Note: When multiple formatters match the same file, they are applied
 # in sequence. The output of one formatter becomes the input of the next.
 

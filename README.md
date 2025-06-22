@@ -188,6 +188,37 @@ formatters:
     patterns: ["*.js"]
 ```
 
+### Readonly Mode in Config Files
+
+You can configure formatters to run in readonly mode using the `readonly` option
+(or `no_write` for compatibility). This is useful for linters that should check
+code but not modify files:
+
+```yaml
+formatters:
+  # First: formatter that modifies files
+  prettier:
+    command: "prettier --stdin-filepath '{}'"
+    patterns: ["*.js"]
+  
+  # Then: linter that checks the formatted result
+  eslint-check:
+    command: "eslint --stdin --stdin-filename '{}' >&2"
+    patterns: ["*.js"]
+    readonly: true  # Check the prettified code without modifying it
+```
+
+This is useful for workflows where you want to:
+1. Format code with prettier
+2. Then verify the formatted code passes linting rules
+3. Abort the commit if linting fails
+
+When a formatter has `readonly: true`:
+- The formatter runs and can fail the commit if it exits with non-zero status
+- That specific formatter doesn't modify files (but other formatters still can)
+- Output to stdout is ignored (send errors to stderr with `>&2`)
+- Regular formatters run first and modify files, then readonly formatters check the result
+
 ### Pattern Sets and Inheritance
 
 You can define reusable pattern sets and use `extends` to inherit patterns:
@@ -353,6 +384,23 @@ formatters:
 ```
 
 The `eslint-stdout` wrapper handles the complexity of ESLint's stdin/stdout behavior and outputs only the fixed code to stdout while sending errors to stderr.
+
+## Check staged changes with a linter without formatting
+
+Perhaps you do not want to reformat files automatically; but you do want to
+prevent files from being committed if they do not conform to style rules. You
+can use git-format-staged with the `--no-write` option, and supply a lint
+command instead of a format command. Here is an example using ESLint:
+
+    $ git-format-staged --no-write -f 'eslint --stdin --stdin-filename "{}" >&2' 'src/*.js'
+
+If this command is run in a pre-commit hook, and the lint command fails the
+commit will be aborted and error messages will be displayed. The lint command
+must read file content via `stdin`. Anything that the lint command outputs to
+`stdout` will be ignored. In the example above `eslint` is given the `--stdin`
+option to tell it to read content from `stdin` instead of reading files from
+disk, and messages from `eslint` are redirected to `stderr` (using the `>&2`
+notation) so that you can see them.
 
 ## Set up a pre-commit hook with Husky
 

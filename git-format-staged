@@ -244,7 +244,8 @@ class Config:
                 config.formatters[name] = {
                     'command': formatter_config.get('command', ''),
                     'patterns': all_patterns,
-                    'extends': extends  # Keep for debugging
+                    'extends': extends,  # Keep for debugging
+                    'readonly': formatter_config.get('readonly', formatter_config.get('no_write', False))
                 }
             else:
                 warn(f"Skipping formatter '{name}': must be a dictionary, got {type(formatter_config).__name__}")
@@ -303,6 +304,8 @@ def format_staged_files_with_formatters(formatters: List[Dict], git_root: str,
         for fmt in formatters:
             debug(f"  Formatter '{fmt['name']}': {fmt['command']}")
             debug(f"    Patterns: {fmt['patterns']}")
+            if 'readonly' in fmt and fmt['readonly']:
+                debug(f"    readonly: True")
         debug("")
     
     try:
@@ -351,36 +354,95 @@ def format_staged_files_with_formatters(formatters: List[Dict], git_root: str,
             # Apply all matching formatters in a pipeline
             orig_hash = entry['dst_hash']
             
-            # Build the formatter pipeline
-            formatter_commands = []
+            # Separate formatters into regular and readonly
+            regular_formatters = []
+            readonly_formatters = []
+            
             for formatter in matching_formatters:
-                command = formatter['command'].replace('{}', entry['src_path'])
-                formatter_commands.append(command)
+                if formatter.get('readonly', False):
+                    readonly_formatters.append(formatter)
+                    if debug_mode:
+                        debug(f"  Formatter '{formatter['name']}' is readonly")
+                else:
+                    regular_formatters.append(formatter)
+                    if debug_mode:
+                        debug(f"  Formatter '{formatter['name']}' is regular")
+            
+            # Start with the original hash
+            current_hash = orig_hash
+            formatted = False
+            
+            # First, run regular formatters in a pipeline if --no-write flag is not set
+            if regular_formatters and write:
                 if debug_mode:
-                    debug(f"  Adding to pipeline: {formatter['name']}")
+                    debug(f"  Running {len(regular_formatters)} regular formatters")
+                formatter_commands = []
+                for formatter in regular_formatters:
+                    command = formatter['command'].replace('{}', entry['src_path'])
+                    formatter_commands.append(command)
+                    if debug_mode:
+                        debug(f"  Adding to pipeline: {formatter['name']}")
+                
+                # Run the pipeline
+                new_hash = format_object_piped(
+                    formatter_commands,
+                    current_hash,
+                    entry['src_path'],
+                    verbose=verbose or debug_mode
+                )
+                
+                # If formatters made changes, update the index
+                if new_hash != current_hash:
+                    if debug_mode:
+                        debug(f"  Formatters changed file (hash: {current_hash[:8]} -> {new_hash[:8]})")
+                    if not object_is_empty(new_hash):
+                        replace_file_in_index(entry, new_hash)
+                        
+                        if update_working_tree:
+                            try:
+                                patch_working_file(entry['src_path'], current_hash, new_hash)
+                            except Exception as err:
+                                warn(str(err))
+                        
+                        files_formatted += 1
+                        formatter_names = ', '.join(f['name'] for f in regular_formatters)
+                        info(f"Reformatted {entry['src_path']} with {formatter_names}")
+                        formatted = True
+                        current_hash = new_hash
+                else:
+                    if debug_mode:
+                        debug(f"  No changes made by formatters")
             
-            # Run the pipeline
-            new_hash = format_object_piped(
-                formatter_commands,
-                orig_hash,
-                entry['src_path'],
-                verbose=verbose or debug_mode
-            )
+            # Then run readonly formatters (they just check, don't modify)
+            if debug_mode and readonly_formatters:
+                debug(f"  Running {len(readonly_formatters)} readonly formatters")
             
-            # If formatters made changes, update the index
-            if write and new_hash != orig_hash:
-                if not object_is_empty(new_hash):
-                    replace_file_in_index(entry, new_hash)
+            for formatter in readonly_formatters:
+                if debug_mode:
+                    debug(f"  Running readonly formatter: {formatter['name']}")
+                
+                command = formatter['command'].replace('{}', entry['src_path'])
+                
+                # Run the formatter but ignore its output
+                try:
+                    get_content = subprocess.Popen(
+                        ['git', 'cat-file', '-p', current_hash],
+                        stdout=subprocess.PIPE
+                    )
+                    check_content = subprocess.Popen(
+                        command,
+                        shell=True,
+                        stdin=get_content.stdout,
+                        stdout=subprocess.PIPE,
+                        stderr=None  # Let stderr pass through
+                    )
+                    get_content.stdout.close()
+                    check_content.communicate()
                     
-                    if update_working_tree:
-                        try:
-                            patch_working_file(entry['src_path'], orig_hash, new_hash)
-                        except Exception as err:
-                            warn(str(err))
-                    
-                    files_formatted += 1
-                    formatter_names = ', '.join(f['name'] for f in matching_formatters)
-                    info(f"Reformatted {entry['src_path']} with {formatter_names}")
+                    if check_content.returncode != 0:
+                        fatal(f"Readonly formatter '{formatter['name']}' failed for {entry['src_path']}")
+                except Exception as e:
+                    fatal(f"Error running readonly formatter '{formatter['name']}': {str(e)}")
         
         if debug_mode:
             debug("")
@@ -952,6 +1014,9 @@ if __name__ == '__main__':
         formatter = args.formatter
         patterns = args.patterns
         
+        if args.debug:
+            debug(f"Checking path: formatter={formatter}, has_config={config is not None}, has_formatters={config and bool(config.formatters)}")
+        
         if not formatter and config and config.formatters:
             # Use config file formatters
             if args.debug:
@@ -962,6 +1027,8 @@ if __name__ == '__main__':
             # Build formatter objects with their pattern specs
             formatters = []
             for name, formatter_config in config.formatters.items():
+                if args.debug:
+                    debug(f"Building formatter '{name}' from config: {formatter_config}")
                 formatter_cmd = formatter_config.get('command', '')
                 formatter_patterns = formatter_config.get('patterns', ['*'])
                 
@@ -969,11 +1036,13 @@ if __name__ == '__main__':
                     warn(f"Formatter '{name}' has no command specified")
                     continue
                 
+                readonly = formatter_config.get('readonly', False)
                 formatters.append({
                     'name': name,
                     'command': formatter_cmd,
                     'patterns': formatter_patterns,
-                    'spec': create_pattern_spec(formatter_patterns)
+                    'spec': create_pattern_spec(formatter_patterns),
+                    'readonly': readonly
                 })
             
             if formatters:
