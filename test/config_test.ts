@@ -56,10 +56,10 @@ test('loads TOML config file and respects patterns', async t => {
   
   await setContent(r, '.git-format-staged.toml', await loadFixture('basic-config.toml'))
   
-  await setContent(r, 'test.py', 'hello world')
-  await setContent(r, 'test.js', 'hello world')
-  await stage(r, 'test.py')
-  await stage(r, 'test.js')
+  await createAndStageFiles(r, {
+    'test.py': 'hello world',
+    'test.js': 'hello world'
+  })
   
   const { stdout } = await formatStaged(r, '--verbose')
   

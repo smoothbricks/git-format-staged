@@ -6,9 +6,9 @@ import {
   git,
   setContent,
   stage,
-  testRepo
+  testRepo,
+  setupConfigAndFiles
 } from './helpers/git'
-import { loadFixture } from './helpers/fixtures'
 
 test.beforeEach(async t => {
   const repo = await testRepo()
@@ -27,20 +27,13 @@ test.afterEach(t => {
 test('YAML anchors and aliases work correctly', async t => {
   const r = repo(t)
   
-  await setContent(r, '.git-format-staged.yml', await loadFixture('yaml-anchors-test.yml'))
-  
-  // Create test files
-  await setContent(r, 'test.js', 'const x = 1')
-  await setContent(r, 'test.py', 'x = 1')
-  await setContent(r, 'myfile', 'content')  // Should match "*myfile" pattern
-  await setContent(r, 'test_file.js', 'test')  // Should NOT match "!*test*" pattern
-  await setContent(r, 'data.json', '{}')
-  
-  await stage(r, 'test.js')
-  await stage(r, 'test.py')
-  await stage(r, 'myfile')
-  await stage(r, 'test_file.js')
-  await stage(r, 'data.json')
+  await setupConfigAndFiles(r, 'yaml-anchors-test.yml', {
+    'test.js': 'const x = 1',
+    'test.py': 'x = 1',
+    'myfile': 'content',  // Should match "*myfile" pattern
+    'test_file.js': 'test',  // Should NOT match "!*test*" pattern
+    'data.json': '{}'
+  })
   
   const { exitCode, stderr } = await formatStagedCaptureError(r, '--debug')
   
@@ -71,15 +64,11 @@ test('YAML anchors and aliases work correctly', async t => {
 test('patterns like *myfile work without anchor definition', async t => {
   const r = repo(t)
   
-  await setContent(r, '.git-format-staged.yml', await loadFixture('glob-patterns-test.yml'))
-  
-  await setContent(r, 'somemyfile', 'content')
-  await setContent(r, 'testignore', 'content')
-  await setContent(r, 'regular.txt', 'content')
-  
-  await stage(r, 'somemyfile')
-  await stage(r, 'testignore')
-  await stage(r, 'regular.txt')
+  await setupConfigAndFiles(r, 'glob-patterns-test.yml', {
+    'somemyfile': 'content',
+    'testignore': 'content',
+    'regular.txt': 'content'
+  })
   
   const { exitCode, stderr } = await formatStagedCaptureError(r, '--debug')
   
@@ -103,17 +92,12 @@ test('patterns like *myfile work without anchor definition', async t => {
 test('file patterns starting with * are handled correctly', async t => {
   const r = repo(t)
   
-  await setContent(r, '.git-format-staged.yml', await loadFixture('pattern-types-test.yml'))
-  
-  await setContent(r, 'myfile', 'content')
-  await setContent(r, 'yourfile', 'content')
-  await setContent(r, 'tempfile', 'content')
-  await setContent(r, 'test.js', 'js content')
-  
-  await stage(r, 'myfile')
-  await stage(r, 'yourfile')
-  await stage(r, 'tempfile')
-  await stage(r, 'test.js')
+  await setupConfigAndFiles(r, 'pattern-types-test.yml', {
+    'myfile': 'content',
+    'yourfile': 'content',
+    'tempfile': 'content',
+    'test.js': 'js content'
+  })
   
   const { stderr } = await formatStagedCaptureError(r, '--debug')
   

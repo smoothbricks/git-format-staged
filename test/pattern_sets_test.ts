@@ -1,5 +1,4 @@
 import test from 'ava'
-import * as path from 'path'
 import {
   Repo,
   cleanup,
@@ -7,7 +6,9 @@ import {
   git,
   setContent,
   stage,
-  testRepo
+  testRepo,
+  setupConfigAndFiles,
+  createAndStageFiles
 } from './helpers/git'
 import { loadFixture } from './helpers/fixtures'
 
@@ -28,21 +29,11 @@ test.afterEach(t => {
 test('pattern sets with single inheritance', async t => {
   const r = repo(t)
   
-  await setContent(r, '.git-format-staged.yml', await loadFixture('pattern-sets.yml'))
-  
-  // Create test files
-  const fse = require('fs-extra')
-  await fse.mkdirp(path.join(r.path, 'src'))
-  await fse.mkdirp(path.join(r.path, 'test'))
-  await fse.mkdirp(path.join(r.path, 'node_modules'))
-  
-  await setContent(r, 'src/app.js', 'const app = 1')
-  await setContent(r, 'test/app.test.js', 'test("app", () => {})')
-  await setContent(r, 'node_modules/lib.js', 'module.exports = {}')
-  
-  await stage(r, 'src/app.js')
-  await stage(r, 'test/app.test.js')
-  await stage(r, 'node_modules/lib.js')
+  await setupConfigAndFiles(r, 'pattern-sets.yml', {
+    'src/app.js': 'const app = 1',
+    'test/app.test.js': 'test("app", () => {})',
+    'node_modules/lib.js': 'module.exports = {}'
+  })
   
   const { stderr } = await formatStagedCaptureError(r, '--debug')
   
@@ -64,20 +55,11 @@ test('pattern sets with single inheritance', async t => {
 test('pattern sets with multiple inheritance', async t => {
   const r = repo(t)
   
-  await setContent(r, '.git-format-staged.yml', await loadFixture('pattern-sets.yml'))
-  
-  // Create test files
-  const fse = require('fs-extra')
-  await fse.mkdirp(path.join(r.path, 'src'))
-  await fse.mkdirp(path.join(r.path, 'test'))
-  
-  await setContent(r, 'src/app.js', 'const app = 1')
-  await setContent(r, 'test/app.spec.ts', 'describe("app", () => {})')
-  await setContent(r, 'config.json', '{}')
-  
-  await stage(r, 'src/app.js')
-  await stage(r, 'test/app.spec.ts')
-  await stage(r, 'config.json')
+  await setupConfigAndFiles(r, 'pattern-sets.yml', {
+    'src/app.js': 'const app = 1',
+    'test/app.spec.ts': 'describe("app", () => {})',
+    'config.json': '{}'
+  })
   
   const { stderr } = await formatStagedCaptureError(r, '--debug')
   
@@ -93,18 +75,11 @@ test('pattern sets work with TOML config', async t => {
   
   await setContent(r, '.git-format-staged.toml', await loadFixture('pattern-sets.toml'))
   
-  // Create test files - same as YAML test
-  const fse = require('fs-extra')
-  await fse.mkdirp(path.join(r.path, 'src'))
-  await fse.mkdirp(path.join(r.path, 'test'))
-  
-  await setContent(r, 'src/app.js', 'const app = 1')
-  await setContent(r, 'test/app.spec.ts', 'describe("app", () => {})')
-  await setContent(r, 'config.json', '{}')
-  
-  await stage(r, 'src/app.js')
-  await stage(r, 'test/app.spec.ts')
-  await stage(r, 'config.json')
+  await createAndStageFiles(r, {
+    'src/app.js': 'const app = 1',
+    'test/app.spec.ts': 'describe("app", () => {})',
+    'config.json': '{}'
+  })
   
   const { stderr } = await formatStagedCaptureError(r, '--debug')
   
@@ -117,13 +92,10 @@ test('pattern sets work with TOML config', async t => {
 test('extends with string vs array', async t => {
   const r = repo(t)
   
-  await setContent(r, '.git-format-staged.yml', await loadFixture('extends-string-array.yml'))
-  
-  await setContent(r, 'test.txt', 'text')
-  await setContent(r, 'test.md', 'markdown')
-  
-  await stage(r, 'test.txt')
-  await stage(r, 'test.md')
+  await setupConfigAndFiles(r, 'extends-string-array.yml', {
+    'test.txt': 'text',
+    'test.md': 'markdown'
+  })
   
   const { stderr } = await formatStagedCaptureError(r, '--debug')
   
@@ -154,20 +126,11 @@ test('undefined pattern set reference fails gracefully', async t => {
 test('pattern sets with only extends (no additional patterns)', async t => {
   const r = repo(t)
   
-  await setContent(r, '.git-format-staged.yml', await loadFixture('pattern-sets.yml'))
-  
-  // Create markdown files
-  const fse = require('fs-extra')
-  await fse.mkdirp(path.join(r.path, 'docs'))
-  await fse.mkdirp(path.join(r.path, 'src'))
-  
-  await setContent(r, 'README.md', '# Test')
-  await setContent(r, 'docs/guide.md', '# Guide')
-  await setContent(r, 'src/code.js', 'const x = 1')
-  
-  await stage(r, 'README.md')
-  await stage(r, 'docs/guide.md')
-  await stage(r, 'src/code.js')
+  await setupConfigAndFiles(r, 'pattern-sets.yml', {
+    'README.md': '# Test',
+    'docs/guide.md': '# Guide',
+    'src/code.js': 'const x = 1'
+  })
   
   const { stderr } = await formatStagedCaptureError(r, '--debug')
   

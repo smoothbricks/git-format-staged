@@ -183,6 +183,12 @@ export async function setupConfigAndFiles(r: Repo, configFixture: string, files:
   await setContent(r, '.git-format-staged.yml', await loadFixture(configFixture))
   
   for (const [filePath, content] of Object.entries(files)) {
+    // Create directory if needed
+    const dir = dirname(filePath)
+    if (dir !== '.') {
+      await fs.mkdirp(join(r.path, dir))
+    }
+    
     await setContent(r, filePath, content)
     await stage(r, filePath)
   }
