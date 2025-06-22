@@ -117,7 +117,9 @@ formatters:
       - "!dist/**"
   
   eslint-fix:
-    command: "eslint --fix --stdin --stdin-filename '{}'"
+    # Using eslint-stdout wrapper for proper pipe-friendly formatting
+    # Install: npm install --save-dev eslint-stdout
+    command: "eslint-stdout '{}'"
     patterns:
       - "*.js"
       - "*.jsx"
@@ -182,7 +184,7 @@ formatters:
   
   # Then run eslint --fix
   eslint-fix:
-    command: "eslint --fix --stdin --stdin-filename '{}'"
+    command: "eslint-stdout '{}'"
     patterns: ["*.js"]
 ```
 
@@ -213,7 +215,7 @@ formatters:
       - "*.yml"
   
   eslint:
-    command: "eslint --fix --stdin --stdin-filename '{}'"
+    command: "eslint-stdout '{}'"
     extends: common  # Single inheritance
     patterns:
       - "test/**/*.js"  # Add more patterns
@@ -267,7 +269,7 @@ formatters:
   
   # Anchor in list - creates nested list (automatically flattened)
   formatter2:
-    command: "eslint --fix-dry-run --stdin --stdin-filename '{}'"
+    command: "eslint-stdout '{}'"
     patterns:
       - *common      # Flattened automatically
       - "*.json"     # Additional patterns
@@ -334,6 +336,23 @@ execution:
 - **Old behavior**: Each formatter was run separately for each file
 - **New behavior**: All formatters for a file run in a single pipeline
 - **Impact**: Significantly faster when using multiple formatters
+
+## Using ESLint with git-format-staged
+
+For ESLint formatting, we recommend using [eslint-stdout](https://www.npmjs.com/package/eslint-stdout), a wrapper that makes ESLint work seamlessly with piped formatters like git-format-staged:
+
+    $ npm install --save-dev eslint-stdout
+
+Then in your configuration:
+
+```yaml
+formatters:
+  eslint:
+    command: "eslint-stdout '{}'"
+    patterns: ["*.js", "*.jsx", "*.ts", "*.tsx"]
+```
+
+The `eslint-stdout` wrapper handles the complexity of ESLint's stdin/stdout behavior and outputs only the fixed code to stdout while sending errors to stderr.
 
 ## Set up a pre-commit hook with Husky
 

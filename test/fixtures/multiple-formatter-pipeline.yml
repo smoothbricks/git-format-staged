@@ -1,0 +1,10 @@
+formatters:
+  first-formatter:
+    command: 'sh -c "cat; echo ''Warning from first formatter'' >&2"'
+    patterns: ["*.txt"]
+  second-formatter:
+    command: 'sh -c "cat; echo ''Info from second formatter'' >&2"'
+    patterns: ["*.txt"]
+  third-formatter:
+    command: "tr '[:lower:]' '[:upper:]'"
+    patterns: ["*.txt"]

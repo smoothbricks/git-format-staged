@@ -83,9 +83,10 @@ patterns = [
   "!.terraform/**"
 ]
 
-# Example of using eslint with --fix-dry-run for stdin mode
+# Example of using eslint with eslint-stdout wrapper for proper pipe-friendly formatting
+# Install: npm install --save-dev eslint-stdout
 [formatters.eslint-fix]
-command = "eslint --fix-dry-run --stdin --stdin-filename '{}'"
+command = "eslint-stdout '{}'"
 extends = ["javascript", "tests"]  # Lint both source and test files
 # No additional patterns needed - just uses inherited ones
 

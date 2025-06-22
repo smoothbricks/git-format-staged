@@ -46,7 +46,9 @@ formatters:
   
   # eslint with auto-fix - extends multiple pattern sets
   eslint-fix:
-    command: "eslint --fix-dry-run --stdin --stdin-filename '{}'"
+    # Uses eslint-stdout wrapper for proper pipe-friendly formatting
+    # Install: npm install --save-dev eslint-stdout
+    command: "eslint-stdout '{}'"
     extends: [javascript, tests]  # Inherit from multiple sets
   
   # Note: When multiple formatters match the same file, they are applied

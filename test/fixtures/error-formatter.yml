@@ -1,0 +1,4 @@
+formatters:
+  error-formatter:
+    command: 'sh -c "echo ''ERROR: Invalid syntax found'' >&2; exit 1"'
+    patterns: ["*.js"]

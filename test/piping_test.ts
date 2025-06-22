@@ -153,6 +153,69 @@ test('handles working tree conflicts gracefully', async t => {
   t.is(workingContent.trim(), 'completely different content')
 })
 
+test('formatter stderr is preserved when pipeline errors', async t => {
+  const r = repo(t)
+  
+  // Create a config with a formatter that writes to stderr and fails
+  await setContent(r, '.git-format-staged.yml', await loadFixture('error-formatter.yml'))
+  
+  await setContent(r, 'test.js', 'const x = 1;')
+  await stage(r, 'test.js')
+  
+  const { exitCode, stderr } = await formatStagedCaptureError(r, '')
+  
+  // Should fail with non-zero exit code
+  t.true(exitCode > 0)
+  
+  // Should preserve the formatter's stderr output
+  t.regex(stderr, /ERROR: Invalid syntax found/)
+})
+
+test('multiple formatter pipeline preserves all stderr outputs', async t => {
+  const r = repo(t)
+  
+  // Create a config with multiple formatters in a pipeline where one writes to stderr
+  await setContent(r, '.git-format-staged.yml', await loadFixture('multiple-formatter-pipeline.yml'))
+  
+  await setContent(r, 'test.txt', 'hello world')
+  await stage(r, 'test.txt')
+  
+  const { stderr } = await formatStaged(r, '')
+  
+  // Should preserve stderr from all formatters in the pipeline
+  t.regex(stderr, /Warning from first formatter/)
+  t.regex(stderr, /Info from second formatter/)
+  
+  // Content should still be transformed by all formatters
+  const content = await getStagedContent(r, 'test.txt')
+  t.is(content.trim(), 'HELLO WORLD')
+})
+
+test('eslint-like formatter with stderr warnings still outputs fixed code', async t => {
+  const r = repo(t)
+  
+  // Simulate an eslint-stdout-like formatter that:
+  // 1. Outputs fixed code to stdout
+  // 2. Outputs warnings/errors to stderr
+  // 3. Returns 0 exit code for warnings
+  await setContent(r, '.git-format-staged.yml', await loadFixture('eslint-like-formatter.yml'))
+  
+  await setContent(r, 'test.js', 'const x = 1')
+  await stage(r, 'test.js')
+  
+  const { exitCode, stderr } = await formatStaged(r, '')
+  
+  // Should succeed even with warnings
+  t.is(exitCode, 0)
+  
+  // Should preserve the warning in stderr
+  t.regex(stderr, /\[WARN\] Missing semicolon/)
+  
+  // Content should be the fixed version
+  const content = await getStagedContent(r, 'test.js')
+  t.is(content.trim(), 'const x = 1')
+})
+
 // Helpers for working with context
 function setRepo (repo: Repo, t: any) {
   t.context.repo = repo

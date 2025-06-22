@@ -1,0 +1,4 @@
+formatters:
+  eslint-like:
+    command: 'sh -c "echo ''const x = 1'' && echo ''[WARN] Missing semicolon'' >&2"'
+    patterns: ["*.js"]
