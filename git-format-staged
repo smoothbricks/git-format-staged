@@ -328,6 +328,10 @@ def format_staged_files_with_formatters(formatters: List[Dict], git_root: str,
                 # Do not process symlinks
                 continue
             
+            if entry['dst_mode'] == '160000':
+                # Do not process submodules (gitlinks)
+                continue
+            
             # Get relative path from git root for pattern matching
             relative_path = os.path.relpath(entry['src_path'], git_root)
             
@@ -501,6 +505,10 @@ def format_staged_files(file_patterns: List[str], formatter: str, git_root: str,
             
             # Skip symlinks
             if entry['dst_mode'] == '120000':
+                continue
+            
+            # Skip submodules (gitlinks)
+            if entry['dst_mode'] == '160000':
                 continue
             
             # Get relative path from git root for pattern matching
