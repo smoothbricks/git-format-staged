@@ -26,18 +26,11 @@ import sys
 import json
 from pathlib import Path
 
-# Try to import optional config file parsers
-try:
-    import yaml
-    HAS_YAML = True
-except ImportError:
-    HAS_YAML = False
-
-try:
-    import toml
-    HAS_TOML = True
-except ImportError:
-    HAS_TOML = False
+# Lazy loading flags for optional config file parsers
+HAS_YAML = None
+HAS_TOML = None
+yaml = None
+toml = None
 from typing import List, Dict, Tuple, Optional, Any
 import logging
 
@@ -47,6 +40,30 @@ try:
 except ImportError:
     print("Error: pathspec library is required. Install with: pip install pathspec", file=sys.stderr)
     sys.exit(1)
+
+def _ensure_yaml():
+    """Lazy load yaml module when needed"""
+    global HAS_YAML, yaml
+    if HAS_YAML is None:
+        try:
+            import yaml as _yaml
+            yaml = _yaml
+            HAS_YAML = True
+        except ImportError:
+            HAS_YAML = False
+    return HAS_YAML
+
+def _ensure_toml():
+    """Lazy load toml module when needed"""
+    global HAS_TOML, toml
+    if HAS_TOML is None:
+        try:
+            import toml as _toml
+            toml = _toml
+            HAS_TOML = True
+        except ImportError:
+            HAS_TOML = False
+    return HAS_TOML
 
 # The string $VERSION is replaced during the publish process.
 VERSION = '$VERSION'
@@ -129,12 +146,11 @@ class Config:
         
         try:
             if config_file.suffix in ['.yml', '.yaml']:
-                if not HAS_YAML:
+                if not _ensure_yaml():
                     fatal(f"YAML config file found but PyYAML is not installed. Install with: pip install pyyaml")
                 # Since YAML scanning happens before parsing, we need to preprocess
                 # but let's be smart about it - only quote things that look like
                 # file patterns, not actual YAML anchors/aliases
-                import re
                 
                 def smart_quote_patterns(yaml_content):
                     """Quote file patterns that would conflict with YAML syntax"""
@@ -175,7 +191,7 @@ class Config:
                 processed_content = smart_quote_patterns(content)
                 data = yaml.safe_load(processed_content) or {}
             elif config_file.suffix == '.toml':
-                if not HAS_TOML:
+                if not _ensure_toml():
                     fatal(f"TOML config file found but toml is not installed. Install with: pip install toml")
                 data = toml.loads(content) or {}
             else:
@@ -975,8 +991,8 @@ if __name__ == '__main__':
         if not config_path.exists():
             fatal(f"Config file not found: {args.config}")
         config = Config.from_file(config_path)
-    else:
-        # Try to find config file automatically
+    elif not args.formatter:
+        # Only search for config file if no formatter is explicitly provided
         config_path = find_config_file()
         if config_path:
             config = Config.from_file(config_path)
@@ -991,9 +1007,9 @@ if __name__ == '__main__':
         
         formatter = args.formatter
         if not formatter and config and config.formatters:
-            # Use first formatter from config if no formatter specified
-            first_formatter = next(iter(config.formatters.values()))
-            formatter = first_formatter.get('command', '')
+                # Use first formatter from config if no formatter specified
+                first_formatter = next(iter(config.formatters.values()))
+                formatter = first_formatter.get('command', '')
         
         if not formatter:
             fatal("No formatter command found.")
@@ -1026,43 +1042,43 @@ if __name__ == '__main__':
             debug(f"Checking path: formatter={formatter}, has_config={config is not None}, has_formatters={config and bool(config.formatters)}")
         
         if not formatter and config and config.formatters:
-            # Use config file formatters
-            if args.debug:
-                debug("Using formatters from config file")
-            
-            git_root = get_git_root()
-            
-            # Build formatter objects with their pattern specs
-            formatters = []
-            for name, formatter_config in config.formatters.items():
+                # Use config file formatters
                 if args.debug:
-                    debug(f"Building formatter '{name}' from config: {formatter_config}")
-                formatter_cmd = formatter_config.get('command', '')
-                formatter_patterns = formatter_config.get('patterns', ['*'])
+                    debug("Using formatters from config file")
                 
-                if not formatter_cmd:
-                    warn(f"Formatter '{name}' has no command specified")
-                    continue
+                git_root = get_git_root()
                 
-                readonly = formatter_config.get('readonly', False)
-                formatters.append({
-                    'name': name,
-                    'command': formatter_cmd,
-                    'patterns': formatter_patterns,
-                    'spec': create_pattern_spec(formatter_patterns),
-                    'readonly': readonly
-                })
-            
-            if formatters:
-                # Process all staged files once, applying all matching formatters
-                format_staged_files_with_formatters(
-                    formatters=formatters,
-                    git_root=git_root,
-                    update_working_tree=not args.no_update_working_tree,
-                    write=not args.no_write and not args.dry_run,
-                    verbose=args.verbose or config.show_commands,
-                    debug_mode=args.debug or config.debug
-                )
+                # Build formatter objects with their pattern specs
+                formatters = []
+                for name, formatter_config in config.formatters.items():
+                    if args.debug:
+                        debug(f"Building formatter '{name}' from config: {formatter_config}")
+                    formatter_cmd = formatter_config.get('command', '')
+                    formatter_patterns = formatter_config.get('patterns', ['*'])
+                    
+                    if not formatter_cmd:
+                        warn(f"Formatter '{name}' has no command specified")
+                        continue
+                    
+                    readonly = formatter_config.get('readonly', False)
+                    formatters.append({
+                        'name': name,
+                        'command': formatter_cmd,
+                        'patterns': formatter_patterns,
+                        'spec': create_pattern_spec(formatter_patterns),
+                        'readonly': readonly
+                    })
+                
+                if formatters:
+                    # Process all staged files once, applying all matching formatters
+                    format_staged_files_with_formatters(
+                        formatters=formatters,
+                        git_root=git_root,
+                        update_working_tree=not args.no_update_working_tree,
+                        write=not args.no_write and not args.dry_run,
+                        verbose=args.verbose or config.show_commands,
+                        debug_mode=args.debug or config.debug
+                    )
         else:
             # Use command line formatter
             if not formatter:
