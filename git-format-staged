@@ -307,344 +307,342 @@ def create_pattern_spec(patterns: List[str]) -> pathspec.PathSpec:
     # Use GitIgnoreSpec for proper gitignore semantics
     return pathspec.GitIgnoreSpec.from_lines(patterns)
 
-def format_staged_files_with_formatters(formatters: List[Dict], git_root: str,
-                                       update_working_tree=True, write=True, verbose=False,
-                                       debug_mode=False):
-    """Format staged files, applying all matching formatters to each file"""
+def collect_git_files(include_staged=True, include_unstaged=False, specific_files=None):
+    """Collect files from git based on what needs to be formatted
     
-    if debug_mode:
-        logger.setLevel(logging.DEBUG)
-        debug("Configuration:")
-        debug(f"  Pattern matching: gitignore-style (pathspec)")
-        debug(f"  Number of formatters: {len(formatters)}")
-        for fmt in formatters:
-            debug(f"  Formatter '{fmt['name']}': {fmt['command']}")
-            debug(f"    Patterns: {fmt['patterns']}")
-            if 'readonly' in fmt and fmt['readonly']:
-                debug(f"    readonly: True")
-        debug("")
-    
-    try:
-        output = subprocess.check_output([
-            'git', 'diff-index',
-            '--cached',
-            '--diff-filter=AM', # select only file additions and modifications
-            '--no-renames',
-            'HEAD'
-        ])
-        
-        files_processed = 0
-        files_formatted = 0
-        files_skipped = 0
-        
-        for line in output.splitlines():
-            entry = parse_diff(line.decode('utf-8'))
-            
-            if entry['dst_mode'] == '120000':
-                # Do not process symlinks
-                continue
-            
-            if entry['dst_mode'] == '160000':
-                # Do not process submodules (gitlinks)
-                continue
-            
-            # Get relative path from git root for pattern matching
-            relative_path = os.path.relpath(entry['src_path'], git_root)
-            
-            if debug_mode:
-                debug(f"Processing staged file: {entry['src_path']}")
-                debug(f"  Relative path: {relative_path}")
-            
-            # Find all formatters that match this file
-            matching_formatters = []
-            for formatter in formatters:
-                if formatter['spec'].match_file(relative_path):
-                    matching_formatters.append(formatter)
-                    if debug_mode:
-                        debug(f"  Formatter '{formatter['name']}' matches")
-            
-            if not matching_formatters:
-                if debug_mode:
-                    debug(f"  No formatters match - skipping")
-                files_skipped += 1
-                continue
-            
-            files_processed += 1
-            
-            # Apply all matching formatters in a pipeline
-            orig_hash = entry['dst_hash']
-            
-            # Separate formatters into regular and readonly
-            regular_formatters = []
-            readonly_formatters = []
-            
-            for formatter in matching_formatters:
-                if formatter.get('readonly', False):
-                    readonly_formatters.append(formatter)
-                    if debug_mode:
-                        debug(f"  Formatter '{formatter['name']}' is readonly")
-                else:
-                    regular_formatters.append(formatter)
-                    if debug_mode:
-                        debug(f"  Formatter '{formatter['name']}' is regular")
-            
-            # Start with the original hash
-            current_hash = orig_hash
-            formatted = False
-            
-            # First, run regular formatters in a pipeline if --no-write flag is not set
-            if regular_formatters and write:
-                if debug_mode:
-                    debug(f"  Running {len(regular_formatters)} regular formatters")
-                formatter_commands = []
-                for formatter in regular_formatters:
-                    command = formatter['command'].replace('{}', entry['src_path'])
-                    formatter_commands.append(command)
-                    if debug_mode:
-                        debug(f"  Adding to pipeline: {formatter['name']}")
-                
-                # Run the pipeline
-                new_hash = format_object_piped(
-                    formatter_commands,
-                    current_hash,
-                    entry['src_path'],
-                    verbose=verbose or debug_mode
-                )
-                
-                # If formatters made changes, update the index
-                if new_hash != current_hash:
-                    if debug_mode:
-                        debug(f"  Formatters changed file (hash: {current_hash[:8]} -> {new_hash[:8]})")
-                    if not object_is_empty(new_hash):
-                        replace_file_in_index(entry, new_hash)
-                        
-                        if update_working_tree:
-                            try:
-                                patch_working_file(entry['src_path'], current_hash, new_hash)
-                            except Exception as err:
-                                warn(str(err))
-                        
-                        files_formatted += 1
-                        formatter_names = ', '.join(f['name'] for f in regular_formatters)
-                        info(f"Reformatted {entry['src_path']} with {formatter_names}")
-                        formatted = True
-                        current_hash = new_hash
-                else:
-                    if debug_mode:
-                        debug(f"  No changes made by formatters")
-            
-            # Then run readonly formatters (they just check, don't modify)
-            if debug_mode and readonly_formatters:
-                debug(f"  Running {len(readonly_formatters)} readonly formatters")
-            
-            for formatter in readonly_formatters:
-                if debug_mode:
-                    debug(f"  Running readonly formatter: {formatter['name']}")
-                
-                command = formatter['command'].replace('{}', entry['src_path'])
-                
-                # Run the formatter but ignore its output
-                try:
-                    get_content = subprocess.Popen(
-                        ['git', 'cat-file', '-p', current_hash],
-                        stdout=subprocess.PIPE
-                    )
-                    check_content = subprocess.Popen(
-                        command,
-                        shell=True,
-                        stdin=get_content.stdout,
-                        stdout=subprocess.PIPE,
-                        stderr=None  # Let stderr pass through
-                    )
-                    get_content.stdout.close()
-                    check_content.communicate()
-                    
-                    if check_content.returncode != 0:
-                        fatal(f"Readonly formatter '{formatter['name']}' failed for {entry['src_path']}")
-                except Exception as e:
-                    fatal(f"Error running readonly formatter '{formatter['name']}': {str(e)}")
-        
-        if debug_mode:
-            debug("")
-            debug("Summary:")
-            debug(f"  Files processed: {files_processed}")
-            debug(f"  Files formatted: {files_formatted}")
-            debug(f"  Files skipped: {files_skipped}")
-            
-    except subprocess.CalledProcessError as err:
-        # Handle case where HEAD doesn't exist (initial commit)
-        if "bad revision 'HEAD'" in str(err):
-            warn("No HEAD commit found. Skipping staged file formatting.")
-        else:
-            fatal(str(err))
-    except Exception as err:
-        fatal(str(err))
-
-def format_staged_files(file_patterns: List[str], formatter: str, git_root: str, 
-                       update_working_tree=True, write=True, verbose=False, 
-                       debug_mode=False, config: Optional[Config] = None):
-    """Format staged files matching the given patterns"""
-    
-    if debug_mode:
-        logger.setLevel(logging.DEBUG)
-        debug("Configuration:")
-        if config:
-            debug(f"  Config file loaded with {len(config.formatters)} formatters")
-        debug(f"  Pattern matching: gitignore-style (pathspec)")
-        debug(f"  Patterns: {file_patterns}")
-        debug(f"  Formatter: {formatter}")
-        debug("")
-    
-    # Create pattern spec for matching
-    if file_patterns:
-        spec = create_pattern_spec(file_patterns)
-    else:
-        # If no patterns specified, match all files
-        spec = create_pattern_spec(['*'])
-    
-    try:
-        output = subprocess.check_output([
-            'git', 'diff-index',
-            '--cached',
-            '--diff-filter=AM',  # select only file additions and modifications
-            '--no-renames',
-            'HEAD'
-        ])
-        
-        files_processed = 0
-        files_formatted = 0
-        files_skipped = 0
-        errors = 0
-        
-        for line in output.splitlines():
-            entry = parse_diff(line.decode('utf-8'))
-            
-            # Skip symlinks
-            if entry['dst_mode'] == '120000':
-                continue
-            
-            # Skip submodules (gitlinks)
-            if entry['dst_mode'] == '160000':
-                continue
-            
-            # Get relative path from git root for pattern matching
-            relative_path = os.path.relpath(entry['src_path'], git_root)
-            
-            if debug_mode:
-                debug(f"Processing staged file: {entry['src_path']}")
-                debug(f"  Relative path: {relative_path}")
-                debug(f"  Testing against patterns...")
-            
-            # Check if file matches patterns
-            if spec.match_file(relative_path):
-                if debug_mode:
-                    debug(f"  Decision: INCLUDE")
-                    if formatter:
-                        debug(f"  Formatter: {formatter}")
-                
-                files_processed += 1
-                
-                if formatter:
-                    result = format_file_in_index(
-                        formatter, entry, 
-                        update_working_tree=update_working_tree, 
-                        write=write, 
-                        verbose=verbose or debug_mode
-                    )
-                    if result:
-                        files_formatted += 1
-                        info(f'Reformatted {entry["src_path"]} with {formatter}')
-            else:
-                if debug_mode:
-                    debug(f"  Decision: EXCLUDE")
-                files_skipped += 1
-        
-        if debug_mode:
-            debug("")
-            debug("Summary:")
-            debug(f"  Files processed: {files_processed}")
-            debug(f"  Files formatted: {files_formatted}")
-            debug(f"  Files skipped: {files_skipped}")
-            debug(f"  Errors: {errors}")
-            
-    except subprocess.CalledProcessError as err:
-        # Handle case where HEAD doesn't exist (initial commit)
-        if "bad revision 'HEAD'" in str(err):
-            warn("No HEAD commit found. Skipping staged file formatting.")
-        else:
-            fatal(str(err))
-    except Exception as err:
-        fatal(str(err))
-
-def format_working_tree_files(file_patterns: List[str], formatter: str, git_root: str,
-                            unstaged_only=False, also_unstaged=False, 
-                            specific_files: Optional[List[str]] = None,
-                            verbose=False, debug_mode=False):
-    """Format files in the working tree"""
-    
-    if debug_mode:
-        logger.setLevel(logging.DEBUG)
-        debug("Working tree formatting mode:")
-        debug(f"  Unstaged only: {unstaged_only}")
-        debug(f"  Also unstaged: {also_unstaged}")
-        debug(f"  Specific files: {specific_files}")
-        debug("")
-    
-    # Create pattern spec
-    if file_patterns:
-        spec = create_pattern_spec(file_patterns)
-    else:
-        spec = create_pattern_spec(['*'])
-    
+    Returns: List of (file_path, is_staged, diff_entry) tuples
+    """
     files_to_format = []
     
     if specific_files:
         # Format specific files provided by user
-        files_to_format = specific_files
-    else:
-        # Get files based on mode
-        if unstaged_only or also_unstaged:
-            # Get unstaged changes
+        for file_path in specific_files:
+            files_to_format.append((file_path, False, None))
+        return files_to_format
+    
+    # Collect staged files
+    if include_staged:
+        try:
+            output = subprocess.check_output([
+                'git', 'diff-index',
+                '--cached',
+                '--diff-filter=AM',
+                '--no-renames',
+                'HEAD'
+            ])
+            
+            for line in output.splitlines():
+                entry = parse_diff(line.decode('utf-8'))
+                
+                # Skip symlinks and submodules
+                if entry['dst_mode'] in ['120000', '160000']:
+                    continue
+                
+                files_to_format.append((entry['src_path'], True, entry))
+                
+        except subprocess.CalledProcessError as err:
+            if "bad revision 'HEAD'" in str(err):
+                warn("No HEAD commit found. Skipping staged file formatting.")
+            else:
+                fatal(str(err))
+    
+    # Collect unstaged files
+    if include_unstaged:
+        unstaged_files = set()
+        
+        # Get modified files
+        try:
             output = subprocess.check_output([
                 'git', 'diff', '--name-only', '--diff-filter=AM'
             ])
-            files_to_format.extend(output.decode('utf-8').splitlines())
+            unstaged_files.update(output.decode('utf-8').splitlines())
+        except subprocess.CalledProcessError:
+            pass
         
-        if also_unstaged:
-            # Also get staged changes for --also-unstaged mode
+        # Get untracked files
+        try:
             output = subprocess.check_output([
-                'git', 'diff', '--cached', '--name-only', '--diff-filter=AM'
+                'git', 'ls-files', '--others', '--exclude-standard'
             ])
-            files_to_format.extend(output.decode('utf-8').splitlines())
+            unstaged_files.update(output.decode('utf-8').splitlines())
+        except subprocess.CalledProcessError:
+            pass
         
-        # Remove duplicates
-        files_to_format = list(set(files_to_format))
+        for file_path in unstaged_files:
+            # Don't add if already in staged list
+            if not any(f[0] == file_path and f[1] for f in files_to_format):
+                files_to_format.append((file_path, False, None))
+    
+    return files_to_format
+
+def find_matching_formatters(formatters, relative_path, debug_mode=False):
+    """Find all formatters that match a given file path
+    
+    Returns: (regular_formatters, readonly_formatters)
+    """
+    matching_formatters = []
+    
+    for formatter in formatters:
+        if formatter['spec'].match_file(relative_path):
+            matching_formatters.append(formatter)
+            if debug_mode:
+                debug(f"  Formatter '{formatter['name']}' matches")
+    
+    # Separate formatters into regular and readonly
+    regular_formatters = [f for f in matching_formatters if not f.get('readonly', False)]
+    readonly_formatters = [f for f in matching_formatters if f.get('readonly', False)]
+    
+    return regular_formatters, readonly_formatters
+
+def run_formatter_on_content(command, content, file_path):
+    """Run a formatter command on content and return the result
+    
+    Returns: (success, output_content, error_message)
+    """
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            input=content,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        if result.returncode != 0:
+            return False, None, result.stderr.decode('utf-8', errors='replace')
+        
+        return True, result.stdout, None
+        
+    except Exception as e:
+        return False, None, str(e)
+
+def write_file_atomically(file_path, content):
+    """Write content to file atomically using temp file + rename"""
+    import tempfile
+    fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(file_path))
+    try:
+        os.write(fd, content)
+        os.close(fd)
+        
+        # Preserve file permissions
+        try:
+            st = os.stat(file_path)
+            os.chmod(temp_path, st.st_mode)
+        except:
+            pass  # New file, no permissions to preserve
+        
+        # Atomically replace
+        os.rename(temp_path, file_path)
+    except:
+        os.close(fd)
+        os.unlink(temp_path)
+        raise
+
+def run_readonly_formatter(formatter, file_path, content_hash=None, content=None):
+    """Run a readonly formatter to check content
+    
+    Either content_hash (for git objects) or content (for working tree) must be provided
+    """
+    command = formatter['command'].replace('{}', file_path)
+    
+    try:
+        if content_hash:
+            # For git objects
+            get_content = subprocess.Popen(
+                ['git', 'cat-file', '-p', content_hash],
+                stdout=subprocess.PIPE
+            )
+            check_content = subprocess.Popen(
+                command,
+                shell=True,
+                stdin=get_content.stdout,
+                stdout=subprocess.PIPE,
+                stderr=None
+            )
+            get_content.stdout.close()
+            check_content.communicate()
+            
+            if check_content.returncode != 0:
+                fatal(f"Readonly formatter '{formatter['name']}' failed for {file_path}")
+        else:
+            # For working tree content
+            success, _, error = run_formatter_on_content(command, content, file_path)
+            if not success:
+                fatal(f"Readonly formatter '{formatter['name']}' failed for {file_path}: {error}")
+                
+    except Exception as e:
+        fatal(f"Error running readonly formatter '{formatter['name']}': {str(e)}")
+
+def format_files_unified(formatters: List[Dict[str, Any]], git_root: str,
+                        include_staged=True, include_unstaged=False,
+                        specific_files: Optional[List[str]] = None,
+                        update_working_tree=True, write=True,
+                        verbose=False, debug_mode=False):
+    """Unified function to format both staged and unstaged files"""
+    
+    if debug_mode:
+        logger.setLevel(logging.DEBUG)
+        debug("Unified formatting mode:")
+        debug(f"  Include staged: {include_staged}")
+        debug(f"  Include unstaged: {include_unstaged}")
+        debug(f"  Specific files: {specific_files}")
+        debug(f"  Number of formatters: {len(formatters)}")
+        for fmt in formatters:
+            debug(f"  Formatter '{fmt['name']}': {fmt['command']}")
+            debug(f"    Patterns: {fmt['patterns']}")
+            if fmt.get('readonly'):
+                debug(f"    readonly: True")
+        debug("")
+    
+    # Collect files to format
+    files_to_format = collect_git_files(include_staged, include_unstaged, specific_files)
     
     files_processed = 0
     files_formatted = 0
     files_skipped = 0
     
-    for file_path in files_to_format:
+    for file_path, is_staged, diff_entry in files_to_format:
         # Get relative path for pattern matching
         relative_path = os.path.relpath(file_path, git_root)
         
         if debug_mode:
-            debug(f"Processing file: {file_path}")
+            file_type = "staged" if is_staged else "working tree"
+            debug(f"Processing {file_type} file: {file_path}")
             debug(f"  Relative path: {relative_path}")
         
-        if spec.match_file(relative_path):
+        # Find all formatters that match this file
+        regular_formatters, readonly_formatters = find_matching_formatters(
+            formatters, relative_path, debug_mode
+        )
+        
+        if not regular_formatters and not readonly_formatters:
             if debug_mode:
-                debug(f"  Decision: INCLUDE")
-            
-            files_processed += 1
-            
-            if format_working_tree_file(formatter, file_path, verbose=verbose or debug_mode):
-                files_formatted += 1
-                info(f'Reformatted {file_path} with {formatter}')
-        else:
-            if debug_mode:
-                debug(f"  Decision: EXCLUDE")
+                debug(f"  No formatters match - skipping")
             files_skipped += 1
+            continue
+        
+        files_processed += 1
+        
+        if is_staged and diff_entry:
+            # Format staged file
+            orig_hash = diff_entry['dst_hash']
+            current_hash = orig_hash
+            formatted = False
+            
+            # Run regular formatters in a pipeline
+            if regular_formatters:
+                if debug_mode:
+                    debug(f"  Running {len(regular_formatters)} regular formatters")
+                
+                formatter_commands = []
+                for formatter in regular_formatters:
+                    command = formatter['command'].replace('{}', diff_entry['src_path'])
+                    formatter_commands.append(command)
+                    if debug_mode:
+                        debug(f"  Adding to pipeline: {formatter['name']}")
+                
+                if write:
+                    # Run the pipeline and update index
+                    new_hash = format_object_piped(
+                        formatter_commands,
+                        current_hash,
+                        diff_entry['src_path'],
+                        verbose=verbose or debug_mode
+                    )
+                    
+                    # If formatters made changes, update the index
+                    if new_hash != current_hash:
+                        if debug_mode:
+                            debug(f"  Formatters changed file (hash: {current_hash[:8]} -> {new_hash[:8]})")
+                        if not object_is_empty(new_hash):
+                            replace_file_in_index(diff_entry, new_hash)
+                            
+                            if update_working_tree:
+                                try:
+                                    patch_working_file(diff_entry['src_path'], current_hash, new_hash)
+                                except Exception as err:
+                                    warn(str(err))
+                            
+                            files_formatted += 1
+                            formatter_names = ', '.join(f['name'] for f in regular_formatters)
+                            info(f"Reformatted {diff_entry['src_path']} with {formatter_names}")
+                            formatted = True
+                            current_hash = new_hash
+                else:
+                    # --no-write mode: just run formatters to check for errors
+                    for formatter in regular_formatters:
+                        command = formatter['command'].replace('{}', diff_entry['src_path'])
+                        
+                        try:
+                            get_content = subprocess.Popen(
+                                ['git', 'cat-file', '-p', current_hash],
+                                stdout=subprocess.PIPE
+                            )
+                            check_content = subprocess.Popen(
+                                command,
+                                shell=True,
+                                stdin=get_content.stdout,
+                                stdout=subprocess.PIPE,
+                                stderr=None
+                            )
+                            get_content.stdout.close()
+                            check_content.communicate()
+                            
+                            if check_content.returncode != 0:
+                                fatal(f"Formatter '{formatter['name']}' failed for {diff_entry['src_path']}")
+                        except Exception as e:
+                            fatal(f"Error running formatter '{formatter['name']}': {str(e)}")
+            
+            # Run readonly formatters
+            for formatter in readonly_formatters:
+                if debug_mode:
+                    debug(f"  Running readonly formatter: {formatter['name']}")
+                
+                run_readonly_formatter(formatter, diff_entry['src_path'], content_hash=current_hash)
+        
+        else:
+            # Format working tree file
+            if not os.path.exists(file_path):
+                warn(f"File not found: {file_path}")
+                continue
+            
+            file_changed = False
+            
+            # Skip readonly formatters for working tree files
+            if regular_formatters and write:
+                try:
+                    # Read original content
+                    with open(file_path, 'rb') as f:
+                        content = f.read()
+                    
+                    original_content = content
+                    
+                    # Apply all formatters in sequence
+                    for formatter in regular_formatters:
+                        command = formatter['command'].replace('{}', file_path)
+                        
+                        if verbose or debug_mode:
+                            info(f"Running: {command}")
+                        
+                        success, formatted_content, error = run_formatter_on_content(command, content, file_path)
+                        
+                        if not success:
+                            warn(f"Formatter '{formatter['name']}' failed for {file_path}: {error}")
+                            break
+                        
+                        if formatted_content != content:
+                            content = formatted_content
+                            file_changed = True
+                    
+                    # Write to file if changed
+                    if file_changed:
+                        write_file_atomically(file_path, content)
+                        files_formatted += 1
+                        formatter_names = ', '.join(f['name'] for f in regular_formatters)
+                        info(f"Reformatted {file_path} with {formatter_names}")
+                            
+                except Exception as e:
+                    warn(f"Error formatting {file_path}: {str(e)}")
     
     if debug_mode:
         debug("")
@@ -652,6 +650,34 @@ def format_working_tree_files(file_patterns: List[str], formatter: str, git_root
         debug(f"  Files processed: {files_processed}")
         debug(f"  Files formatted: {files_formatted}")
         debug(f"  Files skipped: {files_skipped}")
+
+
+def format_staged_files(file_patterns: List[str], formatter: str, git_root: str, 
+                       update_working_tree=True, write=True, verbose=False, 
+                       debug_mode=False, config: Optional[Config] = None):
+    """Format staged files matching the given patterns - legacy function for compatibility"""
+    
+    # Convert to unified format
+    formatters = [{
+        'name': formatter.split()[0] if formatter else 'formatter',
+        'command': formatter,
+        'patterns': file_patterns,
+        'spec': create_pattern_spec(file_patterns),
+        'readonly': False
+    }]
+    
+    format_files_unified(
+        formatters=formatters,
+        git_root=git_root,
+        include_staged=True,
+        include_unstaged=False,
+        specific_files=None,
+        update_working_tree=update_working_tree,
+        write=write,
+        verbose=verbose,
+        debug_mode=debug_mode
+    )
+
 
 def format_working_tree_file(formatter_cmd: str, file_path: str, verbose=False) -> bool:
     """Format a single file in the working tree"""
@@ -672,23 +698,15 @@ def format_working_tree_file(formatter_cmd: str, file_path: str, verbose=False) 
             info(f"Running: {command}")
         
         # Run formatter
-        result = subprocess.run(
-            command,
-            shell=True,
-            input=original_content,
-            capture_output=True
-        )
+        success, formatted_content, error = run_formatter_on_content(command, original_content, file_path)
         
-        if result.returncode != 0:
-            warn(f"Formatter failed for {file_path}: {result.stderr.decode('utf-8', errors='replace')}")
+        if not success:
+            warn(f"Formatter failed for {file_path}: {error}")
             return False
-        
-        formatted_content = result.stdout
         
         # Only write if content changed
         if formatted_content and formatted_content != original_content:
-            with open(file_path, 'wb') as f:
-                f.write(formatted_content)
+            write_file_atomically(file_path, formatted_content)
             return True
         
         return False
@@ -999,103 +1017,76 @@ if __name__ == '__main__':
             if args.debug:
                 debug(f"Found config file: {config_path}")
     
-    # Handle working tree formatting modes
-    if args.unstaged or args.also_unstaged or args.files:
-        # Working tree mode
-        if not args.formatter and not config:
-            fatal("No formatter specified. Use --formatter or create a config file.")
-        
-        formatter = args.formatter
-        if not formatter and config and config.formatters:
-                # Use first formatter from config if no formatter specified
-                first_formatter = next(iter(config.formatters.values()))
-                formatter = first_formatter.get('command', '')
-        
-        if not formatter:
-            fatal("No formatter command found.")
-        
-        git_root = get_git_root()
-        patterns = args.patterns
-        
-        if not patterns:
+    git_root = get_git_root()
+    
+    # Determine what to format
+    include_staged = not (args.unstaged or args.files)
+    include_unstaged = args.unstaged or args.also_unstaged or bool(args.files)
+    
+    # Build formatters list
+    formatters = []
+    
+    if args.formatter:
+        # Command line formatter
+        if not args.patterns:
             fatal("No file patterns specified. Provide patterns to format.")
         
-        format_working_tree_files(
-            file_patterns=patterns,
-            formatter=formatter,
-            git_root=git_root,
-            unstaged_only=args.unstaged and not args.also_unstaged,
-            also_unstaged=args.also_unstaged,
-            specific_files=args.files,
-            verbose=args.verbose,
-            debug_mode=args.debug
-        )
-    else:
-        # Staged files mode (default)
-        if not args.formatter and not config:
-            fatal("No formatter specified. Use --formatter or create a config file.")
-        
-        formatter = args.formatter
-        patterns = args.patterns
-        
+        # Extract formatter name from command for display
+        formatter_name = args.formatter.split()[0] if args.formatter else 'formatter'
+        formatters.append({
+            'name': formatter_name,
+            'command': args.formatter,
+            'patterns': args.patterns,
+            'spec': create_pattern_spec(args.patterns),
+            'readonly': False
+        })
+    elif config and config.formatters:
+        # Config file formatters
         if args.debug:
-            debug(f"Checking path: formatter={formatter}, has_config={config is not None}, has_formatters={config and bool(config.formatters)}")
+            debug("Using formatters from config file")
         
-        if not formatter and config and config.formatters:
-                # Use config file formatters
-                if args.debug:
-                    debug("Using formatters from config file")
-                
-                git_root = get_git_root()
-                
-                # Build formatter objects with their pattern specs
-                formatters = []
-                for name, formatter_config in config.formatters.items():
-                    if args.debug:
-                        debug(f"Building formatter '{name}' from config: {formatter_config}")
-                    formatter_cmd = formatter_config.get('command', '')
-                    formatter_patterns = formatter_config.get('patterns', ['*'])
-                    
-                    if not formatter_cmd:
-                        warn(f"Formatter '{name}' has no command specified")
-                        continue
-                    
-                    readonly = formatter_config.get('readonly', False)
-                    formatters.append({
-                        'name': name,
-                        'command': formatter_cmd,
-                        'patterns': formatter_patterns,
-                        'spec': create_pattern_spec(formatter_patterns),
-                        'readonly': readonly
-                    })
-                
-                if formatters:
-                    # Process all staged files once, applying all matching formatters
-                    format_staged_files_with_formatters(
-                        formatters=formatters,
-                        git_root=git_root,
-                        update_working_tree=not args.no_update_working_tree,
-                        write=not args.no_write and not args.dry_run,
-                        verbose=args.verbose or config.show_commands,
-                        debug_mode=args.debug or config.debug
-                    )
+        for name, formatter_config in config.formatters.items():
+            if args.debug:
+                debug(f"Building formatter '{name}' from config: {formatter_config}")
+            
+            formatter_cmd = formatter_config.get('command', '')
+            formatter_patterns = formatter_config.get('patterns', ['*'])
+            
+            if not formatter_cmd:
+                warn(f"Formatter '{name}' has no command specified")
+                continue
+            
+            readonly = formatter_config.get('readonly', False)
+            
+            # Skip readonly formatters when only formatting working tree files
+            if include_unstaged and not include_staged and readonly:
+                continue
+            
+            formatters.append({
+                'name': name,
+                'command': formatter_cmd,
+                'patterns': formatter_patterns,
+                'spec': create_pattern_spec(formatter_patterns),
+                'readonly': readonly
+            })
+    else:
+        fatal("No formatter specified. Use --formatter or create a config file.")
+    
+    if not formatters:
+        if include_unstaged and not include_staged:
+            fatal("No non-readonly formatters found in config file")
         else:
-            # Use command line formatter
-            if not formatter:
-                fatal("No formatter specified")
-            
-            if not patterns:
-                fatal("No file patterns specified. Provide patterns to format.")
-            
-            git_root = get_git_root()
-            
-            format_staged_files(
-                file_patterns=patterns,
-                formatter=formatter,
-                git_root=git_root,
-                update_working_tree=not args.no_update_working_tree,
-                write=not args.no_write and not args.dry_run,
-                verbose=args.verbose,
-                debug_mode=args.debug,
-                config=config
-            )
+            fatal("No formatters found")
+    
+    # Use the unified formatter
+    format_files_unified(
+        formatters=formatters,
+        git_root=git_root,
+        include_staged=include_staged,
+        include_unstaged=include_unstaged,
+        specific_files=args.files,
+        update_working_tree=not args.no_update_working_tree,
+        write=not args.no_write and not args.dry_run,
+        verbose=args.verbose or (config.show_commands if config else False),
+        debug_mode=args.debug or (config.debug if config else False)
+    )

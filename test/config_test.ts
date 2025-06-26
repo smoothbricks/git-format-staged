@@ -186,6 +186,29 @@ test('YAML anchors and aliases work correctly', async t => {
   t.notRegex(stdout, /node_modules/)
 })
 
+test('config file patterns work with --also-unstaged flag', async t => {
+  const r = repo(t)
+  
+  await setContent(r, '.git-format-staged.yml', await loadFixture('uppercase-formatter.yml'))
+  
+  // Create a mix of staged and unstaged files
+  await setContent(r, 'staged.txt', 'staged content')
+  await stage(r, 'staged.txt')
+  
+  await setContent(r, 'unstaged.txt', 'unstaged content')
+  
+  // The config file contains pattern '*.txt', so it should format both files
+  // when using --also-unstaged without specifying patterns
+  await formatStaged(r, '--also-unstaged')
+  
+  // Both files should be formatted according to config patterns
+  const stagedContent = await getStagedContent(r, 'staged.txt')
+  const unstagedContent = await getContent(r, 'unstaged.txt')
+  
+  t.is(stagedContent.trim(), 'STAGED CONTENT')
+  t.is(unstagedContent.trim(), 'UNSTAGED CONTENT')
+})
+
 test('YAML and TOML configs produce identical results', async t => {
   // Helper to test a config format
   async function testConfigFormat(configFixture: string): Promise<string> {
