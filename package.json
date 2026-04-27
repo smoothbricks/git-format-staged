@@ -38,6 +38,9 @@
     "url": "https://github.com/smoothbricks/git-format-staged/issues"
   },
   "homepage": "https://github.com/smoothbricks/git-format-staged#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "git-format-staged",
     "git-format-all",
