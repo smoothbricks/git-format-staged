@@ -207,7 +207,7 @@ test('excludes files that match a negated glob', async t => {
   contentIs(t, await getContent(r, 'test/index.js'), 'function test() {  }')
 })
 
-test('evaluates file patterns from left-to-right', async t => {
+test('exclusion patterns take precedence regardless of order', async t => {
   const r = repo(t)
 
   await setContent(r, 'index.js', 'function main() {  }')
@@ -232,7 +232,7 @@ test('evaluates file patterns from left-to-right', async t => {
   )
 
   contentIs(t, await getContent(r, 'index.js'), 'function main () {}')
-  contentIs(t, await getContent(r, 'src/index.js'), 'function main () {}')
+  contentIs(t, await getContent(r, 'src/index.js'), 'function main() {  }')
   contentIs(t, await getContent(r, 'test/index.js'), 'function test() {  }')
   contentIs(
     t,

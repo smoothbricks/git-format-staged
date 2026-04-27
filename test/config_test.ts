@@ -165,6 +165,26 @@ test('pathspec patterns work correctly', async t => {
   t.is((await getStagedContent(r, 'README.md')).trim(), 'readme')  // excluded
 })
 
+test('nested exclusions do not break regular extension globs', async t => {
+  const r = repo(t)
+  
+  await setContent(r, '.git-format-staged.yml', await loadFixture('nested-exclusion-and-glob.yml'))
+  
+  await createAndStageFiles(r, {
+    'packages/patchnote/src/index.ts': 'source',
+    'packages/patchnote/templates/workflows/unified.yml': 'template',
+    'docs/secret.skip': 'extension skip',
+    'docs/example.file': 'regular'
+  })
+  
+  await formatStaged(r, '')
+  
+  t.is((await getStagedContent(r, 'packages/patchnote/src/index.ts')).trim(), 'SOURCE')
+  t.is((await getStagedContent(r, 'packages/patchnote/templates/workflows/unified.yml')).trim(), 'template')
+  t.is((await getStagedContent(r, 'docs/secret.skip')).trim(), 'extension skip')
+  t.is((await getStagedContent(r, 'docs/example.file')).trim(), 'REGULAR FORMATTED')
+})
+
 test('YAML anchors and aliases work correctly', async t => {
   const r = repo(t)
   

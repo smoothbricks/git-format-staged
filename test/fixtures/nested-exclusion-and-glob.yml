@@ -1,0 +1,12 @@
+formatters:
+  uppercase:
+    command: tr '[:lower:]' '[:upper:]'
+    patterns:
+      - '!*.skip'
+      - '*'
+      - '!packages/patchnote/templates/**'
+
+  suffix:
+    command: sed 's/$/ FORMATTED/'
+    patterns:
+      - '*.file'

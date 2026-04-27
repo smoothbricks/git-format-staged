@@ -28,7 +28,7 @@ The Nix dev shell provides all required dependencies:
 git-format-staged v4 is an enhanced fork that fixes critical pattern matching bugs and adds new features:
 
 ### Key Features
-- **Proper gitignore-style pattern matching** using pathspec library (fixes fnmatch bugs)
+- **Proper gitwildmatch pattern matching** using pathspec library (fixes fnmatch bugs)
 - **Configuration file support** (.git-format-staged.yml, .git-format-staged.toml)
 - **Multiple formatter pipelines** - chain formatters together
 - **Working tree formatting** (--unstaged, --also-unstaged)
@@ -55,7 +55,7 @@ git-format-staged v4 is an enhanced fork that fixes critical pattern matching bu
 
 1. **Version**: This is v4.0.0 (check git tags - v3.1.1 was the last release)
 2. **Dependencies**: pathspec is required, yaml/toml are optional but available in nix shell
-3. **Pattern Matching**: Uses pathspec.GitIgnoreSpec for correct gitignore semantics
+3. **Pattern Matching**: Uses pathspec gitwildmatch syntax with negative patterns as absolute exclusions
 4. **Formatter Piping**: All formatters for a file run in a single pipeline for efficiency
 
 ## Common Commands

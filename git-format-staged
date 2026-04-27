@@ -302,10 +302,30 @@ def find_config_file() -> Optional[Path]:
     
     return None
 
-def create_pattern_spec(patterns: List[str]) -> pathspec.PathSpec:
-    """Convert patterns into a pathspec GitIgnoreSpec"""
-    # Use GitIgnoreSpec for proper gitignore semantics
-    return pathspec.GitIgnoreSpec.from_lines(patterns)
+class FormatterPatternSpec:
+    """Matcher for formatter ownership patterns.
+
+    Positive patterns select files for a formatter. Negative patterns are
+    absolute exclusions, regardless of where they appear in the list.
+    """
+    def __init__(self, patterns: List[str]):
+        positive_patterns = []
+        negative_patterns = []
+        for pattern in patterns:
+            if pattern.startswith('!') and len(pattern) > 1:
+                negative_patterns.append(pattern[1:])
+            else:
+                positive_patterns.append(pattern)
+
+        self.positive_spec = pathspec.PathSpec.from_lines('gitwildmatch', positive_patterns)
+        self.negative_spec = pathspec.PathSpec.from_lines('gitwildmatch', negative_patterns)
+
+    def match_file(self, path: str) -> bool:
+        return self.positive_spec.match_file(path) and not self.negative_spec.match_file(path)
+
+def create_pattern_spec(patterns: List[str]) -> FormatterPatternSpec:
+    """Convert patterns into a formatter matcher with exclusion precedence."""
+    return FormatterPatternSpec(patterns)
 
 def collect_git_files(include_staged=True, include_unstaged=False, specific_files=None):
     """Collect files from git based on what needs to be formatted

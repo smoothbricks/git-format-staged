@@ -128,7 +128,7 @@ add_initial_commit(tmpdir)  # Helper function in tests
 ```
 
 ### Pattern matching failures
-Remember that patterns use gitignore semantics:
+Remember that patterns use gitwildmatch syntax with exclusion precedence:
 - `*.js` matches all .js files
 - `src/**/*.js` matches .js files under src/
 - `!vendor/**/*` excludes all files under vendor/ (note the `/*`)

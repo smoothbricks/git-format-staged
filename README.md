@@ -37,7 +37,7 @@ patch step can be disabled with the `--no-update-working-tree` option.
 
 git-format-staged v4 introduces several major enhancements:
 
-- **Proper gitignore-style pattern matching**: Uses the `pathspec` library for correct pattern handling
+- **Proper gitwildmatch pattern matching**: Uses the `pathspec` library for correct pattern handling
 - **Configuration file support**: Define formatters in YAML or TOML files
 - **Multiple formatter support**: Apply multiple formatters to the same file in a pipeline
 - **Enhanced debugging**: Comprehensive debug output with `--debug`
@@ -93,7 +93,7 @@ patterns to identify which files should be formatted. For example:
     $ git-format-staged --formatter 'prettier --stdin-filepath "{}"' 'src/*.js'
 
 That will format all files under `src/` and its subdirectories using
-`prettier`. The file patterns use gitignore-style matching via the `pathspec`
+`prettier`. The file patterns use gitwildmatch-style matching via the `pathspec`
 library.
 
 ### Configuration Files
@@ -319,16 +319,16 @@ Patterns starting with `*`, `!`, `&`, etc. are automatically handled:
 
 ### Pattern Matching
 
-Patterns use gitignore-style syntax:
+Patterns use gitwildmatch-style syntax:
 - `*.js` matches all .js files recursively
 - `src/**/*.js` matches .js files under src/
 - `!vendor/**` excludes all files under vendor/
 - `*.test.js` matches test files
 - `!*.test.js` excludes test files
 
-Files can be excluded by prefixing a pattern with `!`. Patterns are evaluated
-in order: if a file matches multiple patterns, all matching patterns are
-considered, with exclusions taking precedence.
+Files can be excluded by prefixing a pattern with `!`. Exclusions take
+precedence regardless of where they appear in the pattern list, so `['*',
+'!*.md']` and `['!*.md', '*']` both exclude Markdown files.
 
 ### Working Tree Formatting
 
@@ -351,7 +351,7 @@ execution:
 
 ### Pattern Matching
 - **Old behavior**: Used Python's `fnmatch` which had bugs with absolute path conversion
-- **New behavior**: Uses `pathspec` library for proper gitignore-style matching
+- **New behavior**: Uses `pathspec` library for proper gitwildmatch-style matching with exclusion precedence
 - **Migration**: Patterns should work the same, but edge cases are now handled correctly
 
 ### Multiple Formatters

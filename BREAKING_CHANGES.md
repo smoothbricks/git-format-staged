@@ -13,9 +13,9 @@ The most significant change in v4.0 is the fix to pattern matching behavior. The
 - `git-format-staged -f fmt '!*.md' '*'` would EXCLUDE .md files (confusing!)
 
 **v4.0 (Fixed):**
-- Uses `pathspec` library for proper gitignore-style pattern matching
+- Uses `pathspec` library for proper gitwildmatch-style pattern matching
 - Patterns work as documented and expected
-- Both `'*' '!*.md'` and `'!*.md' '*'` correctly exclude .md files
+- Negative patterns always take precedence, so both `'*' '!*.md'` and `'!*.md' '*'` correctly exclude .md files
 - Full support for `**` recursive patterns
 
 ### Migration Guide
