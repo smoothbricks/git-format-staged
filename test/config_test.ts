@@ -107,6 +107,49 @@ test('formats unstaged files with --unstaged flag', async t => {
   t.is(stagedContent.trim(), 'staged content')
 })
 
+test('does not format untracked files with --unstaged by default', async t => {
+  const r = repo(t)
+  
+  await setContent(r, '.git-format-staged.yml', await loadFixture('uppercase-formatter.yml'))
+  await setContent(r, 'tracked.txt', 'original content')
+  await stage(r, 'tracked.txt')
+  await git(r, 'commit', '-m', 'add tracked.txt')
+  await setContent(r, 'tracked.txt', 'tracked unstaged content')
+  await setContent(r, 'untracked.txt', 'untracked content')
+  
+  await formatStaged(r, '--unstaged')
+  
+  t.is((await getContent(r, 'tracked.txt')).trim(), 'TRACKED UNSTAGED CONTENT')
+  t.is((await getContent(r, 'untracked.txt')).trim(), 'untracked content')
+})
+
+test('formats untracked files with --unstaged --include-untracked', async t => {
+  const r = repo(t)
+  
+  await setContent(r, '.git-format-staged.yml', await loadFixture('uppercase-formatter.yml'))
+  await setContent(r, 'tracked.txt', 'original content')
+  await stage(r, 'tracked.txt')
+  await git(r, 'commit', '-m', 'add tracked.txt')
+  await setContent(r, 'tracked.txt', 'tracked unstaged content')
+  await setContent(r, 'untracked.txt', 'untracked content')
+  
+  await formatStaged(r, '--unstaged --include-untracked')
+  
+  t.is((await getContent(r, 'tracked.txt')).trim(), 'TRACKED UNSTAGED CONTENT')
+  t.is((await getContent(r, 'untracked.txt')).trim(), 'UNTRACKED CONTENT')
+})
+
+test('--files formats explicitly supplied untracked files', async t => {
+  const r = repo(t)
+  
+  await setContent(r, '.git-format-staged.yml', await loadFixture('uppercase-formatter.yml'))
+  await setContent(r, 'untracked.txt', 'untracked content')
+  
+  await formatStaged(r, '--files untracked.txt')
+  
+  t.is((await getContent(r, 'untracked.txt')).trim(), 'UNTRACKED CONTENT')
+})
+
 test('debug output shows pattern matching decisions', async t => {
   const r = repo(t)
   
@@ -212,9 +255,12 @@ test('config file patterns work with --also-unstaged flag', async t => {
   await setContent(r, '.git-format-staged.yml', await loadFixture('uppercase-formatter.yml'))
   
   // Create a mix of staged and unstaged files
+  await setContent(r, 'unstaged.txt', 'original unstaged content')
+  await stage(r, 'unstaged.txt')
+  await git(r, 'commit', '-m', 'add unstaged.txt')
+
   await setContent(r, 'staged.txt', 'staged content')
   await stage(r, 'staged.txt')
-  
   await setContent(r, 'unstaged.txt', 'unstaged content')
   
   // The config file contains pattern '*.txt', so it should format both files
@@ -227,6 +273,44 @@ test('config file patterns work with --also-unstaged flag', async t => {
   
   t.is(stagedContent.trim(), 'STAGED CONTENT')
   t.is(unstagedContent.trim(), 'UNSTAGED CONTENT')
+})
+
+test('does not format untracked files with --also-unstaged by default', async t => {
+  const r = repo(t)
+  
+  await setContent(r, '.git-format-staged.yml', await loadFixture('uppercase-formatter.yml'))
+  await setContent(r, 'tracked.txt', 'original content')
+  await stage(r, 'tracked.txt')
+  await git(r, 'commit', '-m', 'add tracked.txt')
+  await setContent(r, 'staged.txt', 'staged content')
+  await stage(r, 'staged.txt')
+  await setContent(r, 'tracked.txt', 'tracked unstaged content')
+  await setContent(r, 'untracked.txt', 'untracked content')
+  
+  await formatStaged(r, '--also-unstaged')
+  
+  t.is((await getStagedContent(r, 'staged.txt')).trim(), 'STAGED CONTENT')
+  t.is((await getContent(r, 'tracked.txt')).trim(), 'TRACKED UNSTAGED CONTENT')
+  t.is((await getContent(r, 'untracked.txt')).trim(), 'untracked content')
+})
+
+test('formats untracked files with --also-unstaged --include-untracked', async t => {
+  const r = repo(t)
+  
+  await setContent(r, '.git-format-staged.yml', await loadFixture('uppercase-formatter.yml'))
+  await setContent(r, 'tracked.txt', 'original content')
+  await stage(r, 'tracked.txt')
+  await git(r, 'commit', '-m', 'add tracked.txt')
+  await setContent(r, 'staged.txt', 'staged content')
+  await stage(r, 'staged.txt')
+  await setContent(r, 'tracked.txt', 'tracked unstaged content')
+  await setContent(r, 'untracked.txt', 'untracked content')
+  
+  await formatStaged(r, '--also-unstaged --include-untracked')
+  
+  t.is((await getStagedContent(r, 'staged.txt')).trim(), 'STAGED CONTENT')
+  t.is((await getContent(r, 'tracked.txt')).trim(), 'TRACKED UNSTAGED CONTENT')
+  t.is((await getContent(r, 'untracked.txt')).trim(), 'UNTRACKED CONTENT')
 })
 
 test('YAML and TOML configs produce identical results', async t => {

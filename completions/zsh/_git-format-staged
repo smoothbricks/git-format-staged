@@ -6,6 +6,7 @@ _git-format-staged() {
         '--config[Config file]:config file:_files -g "*.{yml,yaml,toml}"' \
         '--unstaged[Format only unstaged changes]' \
         '--also-unstaged[Format both staged and unstaged changes]' \
+        '--include-untracked[Include untracked files with unstaged formatting]' \
         '--files[Format specific files]:files:_files' \
         '--no-update-working-tree[Do not update working tree files]' \
         '--no-write[Dry run, do not modify files]' \

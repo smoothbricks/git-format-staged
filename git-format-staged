@@ -327,7 +327,7 @@ def create_pattern_spec(patterns: List[str]) -> FormatterPatternSpec:
     """Convert patterns into a formatter matcher with exclusion precedence."""
     return FormatterPatternSpec(patterns)
 
-def collect_git_files(include_staged=True, include_unstaged=False, specific_files=None):
+def collect_git_files(include_staged=True, include_unstaged=False, specific_files=None, include_untracked=False):
     """Collect files from git based on what needs to be formatted
     
     Returns: List of (file_path, is_staged, diff_entry) tuples
@@ -379,14 +379,17 @@ def collect_git_files(include_staged=True, include_unstaged=False, specific_file
         except subprocess.CalledProcessError:
             pass
         
-        # Get untracked files
-        try:
-            output = subprocess.check_output([
-                'git', 'ls-files', '--others', '--exclude-standard'
-            ])
-            unstaged_files.update(output.decode('utf-8').splitlines())
-        except subprocess.CalledProcessError:
-            pass
+        # Untracked files are opt-in. Formatting every untracked file by default
+        # is surprising in worktrees that contain scratch directories or nested
+        # external repo clones.
+        if include_untracked:
+            try:
+                output = subprocess.check_output([
+                    'git', 'ls-files', '--others', '--exclude-standard'
+                ])
+                unstaged_files.update(output.decode('utf-8').splitlines())
+            except subprocess.CalledProcessError:
+                pass
         
         for file_path in unstaged_files:
             # Don't add if already in staged list
@@ -496,6 +499,7 @@ def run_readonly_formatter(formatter, file_path, content_hash=None, content=None
 def format_files_unified(formatters: List[Dict[str, Any]], git_root: str,
                         include_staged=True, include_unstaged=False,
                         specific_files: Optional[List[str]] = None,
+                        include_untracked=False,
                         update_working_tree=True, write=True,
                         verbose=False, debug_mode=False):
     """Unified function to format both staged and unstaged files"""
@@ -505,6 +509,7 @@ def format_files_unified(formatters: List[Dict[str, Any]], git_root: str,
         debug("Unified formatting mode:")
         debug(f"  Include staged: {include_staged}")
         debug(f"  Include unstaged: {include_unstaged}")
+        debug(f"  Include untracked: {include_untracked}")
         debug(f"  Specific files: {specific_files}")
         debug(f"  Number of formatters: {len(formatters)}")
         for fmt in formatters:
@@ -515,7 +520,7 @@ def format_files_unified(formatters: List[Dict[str, Any]], git_root: str,
         debug("")
     
     # Collect files to format
-    files_to_format = collect_git_files(include_staged, include_unstaged, specific_files)
+    files_to_format = collect_git_files(include_staged, include_unstaged, specific_files, include_untracked)
     
     files_processed = 0
     files_formatted = 0
@@ -692,6 +697,7 @@ def format_staged_files(file_patterns: List[str], formatter: str, git_root: str,
         include_staged=True,
         include_unstaged=False,
         specific_files=None,
+        include_untracked=False,
         update_working_tree=update_working_tree,
         write=write,
         verbose=verbose,
@@ -988,6 +994,11 @@ if __name__ == '__main__':
             help='Format both staged AND unstaged changes'
             )
     parser.add_argument(
+            '--include-untracked',
+            action='store_true',
+            help='Include untracked files when formatting unstaged changes. By default only tracked changes are included.'
+            )
+    parser.add_argument(
             '--files',
             nargs='+',
             help='Format specific files regardless of git status',
@@ -1105,6 +1116,7 @@ if __name__ == '__main__':
         include_staged=include_staged,
         include_unstaged=include_unstaged,
         specific_files=args.files,
+        include_untracked=args.include_untracked,
         update_working_tree=not args.no_update_working_tree,
         write=not args.no_write and not args.dry_run,
         verbose=args.verbose or (config.show_commands if config else False),

@@ -340,6 +340,14 @@ Format both staged and unstaged changes:
 
     $ git-format-staged --also-unstaged --formatter 'prettier --stdin-filepath "{}"' '*.js'
 
+By default, `--unstaged` and `--also-unstaged` include only tracked files with
+unstaged changes. Add `--include-untracked` to also format untracked files:
+
+    $ git-format-staged --unstaged --include-untracked --formatter 'black -' '*.py'
+
+The `--files` option is explicit and can format supplied files regardless of
+whether Git tracks them.
+
 ### Debugging
 
 Use `--debug` to see detailed information about pattern matching and formatter
